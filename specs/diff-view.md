@@ -135,6 +135,7 @@ Returning to source differs per view:
 
 - A comment anchors as `review-model.md` defines: a `side`, a `start..end` range, the verbatim snippet.
 - A selection runs over content rows. A fold is a hard boundary it cannot cross.
+- A selection covers the same rows whichever end it grew from. Extending upward and extending downward over the same rows anchor the same comment, and the input box opens under the range's last line either way (`tui.md`).
 - The export snippet is rebuilt from the selected rows as `+`/`−`/space-prefixed lines. The markers live in the export, not on screen.
 
 ### Config

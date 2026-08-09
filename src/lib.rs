@@ -1269,16 +1269,13 @@ fn reconcile_plugin_config(
         return ConfigGate::Unchanged;
     };
 
-    let bases_changed = previous.base_branches() != current.base_branches();
-    let file_changed = bases_changed || previous.theme() != current.theme();
-    let pr_changed = bases_changed || previous.forge_hosts() != current.forge_hosts();
+    let pr_changed = previous.forge_hosts() != current.forge_hosts();
     if pr_changed {
         pr.config_changed(app.tab == crate::app::Tab::Pr);
     }
-    if file_changed {
-        // `base_branches` participates in every Branch-scope derivation, and a theme change
-        // invalidates highlighted diffs. Rebuild before another input or frame can mix states;
-        // `reload` preserves the frozen diff while composing.
+    if previous.theme() != current.theme() {
+        // A theme change invalidates highlighted diffs. Rebuild before another input or
+        // frame can mix states; `reload` preserves the frozen diff while composing.
         if let Err(error) = app.reload() {
             app.status = format!("config refresh failed: {error}");
         }
@@ -1335,9 +1332,7 @@ fn apply_plugin_config_observation(
                 return false;
             } else if changed {
                 let current = app.plugin_config().expect("ready config");
-                if current.base_branches() != next.base_branches()
-                    || current.forge_hosts() != next.forge_hosts()
-                {
+                if current.forge_hosts() != next.forge_hosts() {
                     *epoch = epoch.wrapping_add(1);
                 }
                 app.set_plugin_config(next);
@@ -1506,6 +1501,26 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
         return Ok(());
     }
 
+    // The base picker: every printable narrows the filter — the bound shortcuts included, so
+    // a branch named `qa` is typable — and the filter edits with the comment editor's
+    // controls, like every other text field. `↑`/`↓` (and `ctrl+n`/`p`) move the highlight,
+    // so the single-line filter keeps `←`/`→` for its caret, `enter` picks, `esc` cancels
+    // (`specs/input.md` Base picker).
+    if app.mode == Mode::BasePick {
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let word = alt || ctrl;
+        match key.code {
+            Esc => app.close_base_picker(),
+            Enter => app.base_picker_pick()?,
+            Down => app.base_picker_move(1),
+            Up => app.base_picker_move(-1),
+            Char('n') if ctrl => app.base_picker_move(1),
+            Char('p') if ctrl => app.base_picker_move(-1),
+            code => apply_text_edit(app, code, ctrl, alt, word),
+        }
+        return Ok(());
+    }
+
     // The read-only PR tab: navigate the snapshot and open links; authoring actions are inert.
     if app.tab == crate::app::Tab::Pr {
         match (action, key.code) {
@@ -1578,6 +1593,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::ScopeUncommitted => app.set_scope(Scope::Uncommitted)?,
             K::ScopeBranch => app.set_scope(Scope::Branch)?,
             K::ScopeLastTurn => app.set_scope(Scope::LastTurn)?,
+            K::BasePick => app.open_base_picker(),
             K::Select => app.toggle_select(),
             K::Comment => app.start_comment(),
             // `edit`/`delete` act on the comment under the diff cursor, so they only fire with
@@ -1703,6 +1719,17 @@ pub fn handle_mouse(
                     None => {}
                 }
             }
+            // Same shape in the base picker: click to highlight, click the highlight to pick
+            // (`specs/input.md` Base picker).
+            MouseEventKind::Down(MouseButton::Left) if app.mode == Mode::BasePick => {
+                match ui::hit_base_picker_row(area, app, m.column, m.row) {
+                    Some(i) if app.base_picker.as_ref().is_some_and(|bp| bp.cursor == i) => {
+                        app.base_picker_pick()?;
+                    }
+                    Some(i) => app.base_picker_goto(i),
+                    None => {}
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) if app.divider_drag_captured() => {
                 return Ok(());
             }
@@ -1789,7 +1816,9 @@ pub fn handle_mouse(
                 match hit {
                     ui::HeaderHit::Tab(tab) => app.set_tab(tab)?,
                     ui::HeaderHit::Scope => app.set_scope(app.scope.cycle())?,
-                    ui::HeaderHit::Send => app.send_to_agent(),
+                    // Inert when the picker cannot open here — with a `--base` flag the
+                    // label names the base without offering a choice (`specs/input.md`).
+                    ui::HeaderHit::Base => app.open_base_picker(),
                 }
             } else if let Some(i) =
                 ui::hit_file(area, app, m.column, m.row, app.file_rows.len(), app.file_scroll)
@@ -2570,8 +2599,11 @@ mod refresh_tests {
         assert_eq!(epoch, 0);
         assert!(!app.plugin_config().unwrap().auto_open());
 
-        std::fs::write(config_dir.path().join("config.toml"), "base_branches = [\"develop\"]\n")
-            .unwrap();
+        std::fs::write(
+            config_dir.path().join("config.toml"),
+            "github_host = \"github.example.com\"\n",
+        )
+        .unwrap();
         assert!(apply_plugin_config_observation(
             &mut app,
             &cfg,

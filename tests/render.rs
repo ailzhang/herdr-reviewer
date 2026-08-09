@@ -885,27 +885,21 @@ fn the_box_is_inserted_under_the_selected_line() {
 const AREA: Rect = Rect { x: 0, y: 0, width: 140, height: 40 };
 
 #[test]
-fn header_clicks_map_to_scope_and_send() {
+fn header_clicks_map_to_the_scope_chip() {
     let app = edited_app(); // scope uncommitted, no comments
     // Scan the header row instead of hardcoding columns, so the test survives changes
-    // to the label/button text.
+    // to the label text.
     let scope: Vec<u16> = (0..AREA.width)
         .filter(|&c| ui::hit_header(AREA, &app, app.keymap(), c, 0) == Some(HeaderHit::Scope))
         .collect();
-    let send: Vec<u16> = (0..AREA.width)
-        .filter(|&c| ui::hit_header(AREA, &app, app.keymap(), c, 0) == Some(HeaderHit::Send))
-        .collect();
 
     assert!(!scope.is_empty(), "scope chip is clickable");
-    assert!(!send.is_empty(), "send button is clickable");
-    assert!(scope.iter().max() < send.iter().min(), "scope is left of the button, no overlap");
-    assert!(*send.iter().max().unwrap() < AREA.width);
 
     let gap = scope.iter().max().unwrap() + 1;
     assert_eq!(
         ui::hit_header(AREA, &app, app.keymap(), gap, 0),
         None,
-        "the space between controls is inert"
+        "the space right of the chip is inert"
     );
     assert_eq!(
         ui::hit_header(AREA, &app, app.keymap(), scope[0], 5),
@@ -1218,7 +1212,7 @@ fn all_files_tab_bar_footer_and_count_read_for_the_tab() {
 
     let out = render(&app);
     assert!(out.contains("1 Changes"), "tab labels carry their switch digit:\n{out}");
-    assert!(out.contains("2 All files"));
+    assert!(out.contains("2 Files"));
     assert!(
         out.contains("1 changed"),
         "the changed count stays in the header on All files:\n{out}"
@@ -1237,30 +1231,6 @@ fn all_files_tab_bar_footer_and_count_read_for_the_tab() {
     let expanded = render(&app);
     assert!(expanded.contains("scope"), "the `?` expansion lists the scope keys:\n{expanded}");
     assert!(expanded.contains("move"), "and labels the movement band:\n{expanded}");
-}
-
-#[test]
-fn a_narrow_overflowing_header_does_not_mis_map_a_click_to_send() {
-    let r = Repo::init();
-    r.write("a.rs", "x\n");
-    r.commit_all("init");
-    r.write("a.rs", "y\n");
-    let app = app_on(&r);
-
-    // At a narrow pane width the two-tab header overflows and the Send button is off-screen.
-    // No on-screen column may map to Send — the old right-aligned hit-zone landed a phantom Send
-    // over the chip/tab region, swallowing those clicks as a Send.
-    let width: u16 = 34;
-    let area = Rect::new(0, 0, width, 40);
-    let phantom =
-        (0..width).any(|c| ui::hit_header(area, &app, app.keymap(), c, 0) == Some(HeaderHit::Send));
-    assert!(!phantom, "no on-screen column mis-maps to Send when the narrow header overflows");
-
-    // At a wide width the Send button is right-aligned and clickable.
-    let wide = Rect::new(0, 0, 140, 40);
-    let send =
-        (0..140).any(|c| ui::hit_header(wide, &app, app.keymap(), c, 0) == Some(HeaderHit::Send));
-    assert!(send, "Send is clickable when the header fits");
 }
 
 #[test]
@@ -1349,8 +1319,7 @@ fn header_tab_hits_align_with_wide_hint_keys() {
     let row0 = out.lines().next().unwrap().to_string();
     let col_of = |needle: &str| row0[..row0.find(needle).unwrap()].chars().count() as u16;
     let area = Rect::new(0, 0, 140, 40);
-    for (needle, tab) in
-        [("Changes", Tab::Changes), ("2 All files", Tab::AllFiles), ("3 PR", Tab::Pr)]
+    for (needle, tab) in [("Changes", Tab::Changes), ("2 Files", Tab::AllFiles), ("3 PR", Tab::Pr)]
     {
         assert_eq!(
             ui::hit_header(area, &app, app.keymap(), col_of(needle), 0),
@@ -2801,4 +2770,179 @@ fn a_click_on_a_picker_row_moves_the_highlight_and_misses_stay_inert() {
     )
     .unwrap();
     assert_eq!(app.picker_cursor, 2, "a click moves the highlight to the clicked row");
+}
+
+// --- Header base label (specs/tui.md) ------------------------------------------------------
+
+/// A repo on branch `feature` past `main`, with `origin/HEAD` naming `main` the default.
+/// The repo rides along: opening the picker shells out to git at click time.
+fn based_app() -> (Repo, App) {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    r.set_origin_default("main", "main");
+    r.git(&["branch", "dev"]);
+    r.git(&["checkout", "-q", "-b", "feature"]);
+    r.write("hello.rs", "alpha\nBETA\n");
+    r.commit_all("edit");
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    (r, app)
+}
+
+#[test]
+fn the_branch_header_names_the_base_and_its_click_opens_the_picker() {
+    let (_repo, mut app) = based_app();
+    let line0 = render(&app).lines().next().unwrap().to_string();
+    assert!(line0.contains("[branch] vs main"), "the bare base name follows the scope: {line0}");
+
+    let base: Vec<u16> = (0..AREA.width)
+        .filter(|&c| ui::hit_header(AREA, &app, app.keymap(), c, 0) == Some(HeaderHit::Base))
+        .collect();
+    assert!(!base.is_empty(), "the base label is clickable");
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        column: base[0],
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    let keymap = app.keymap().clone();
+    handle_mouse(&mut app, click, AREA, &[], &keymap).unwrap();
+    let frame = render(&app);
+    assert!(frame.contains("Pick base"), "the click opens the picker popup");
+    assert!(frame.contains("dev"), "the sibling branch is a row");
+    assert!(frame.contains("default"), "the default branch is marked");
+}
+
+#[test]
+fn a_skipped_pick_warns_beside_the_resolved_base() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    r.set_origin_default("main", "main");
+    herdr_reviewr::git::write_base_pick(r.path(), "gone").unwrap();
+    r.git(&["checkout", "-q", "-b", "feature"]);
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    let line0 = render(&app).lines().next().unwrap().to_string();
+    assert!(line0.contains("vs main · gone missing"), "the dormant pick reads as skipped: {line0}");
+}
+
+#[test]
+fn without_a_resolving_base_the_header_reads_no_base() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    r.git(&["checkout", "-q", "-b", "feature"]);
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    let frame = render(&app);
+    let line0 = frame.lines().next().unwrap().to_string();
+    assert!(line0.contains("[branch] no base"), "the empty state is named: {line0}");
+    assert!(frame.contains("pick base"), "the footer advertises the picker");
+}
+
+#[test]
+fn a_dormant_pick_shows_beside_the_empty_state() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    herdr_reviewr::git::write_base_pick(r.path(), "gone").unwrap();
+    r.git(&["checkout", "-q", "-b", "feature"]);
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    let line0 = render(&app).lines().next().unwrap().to_string();
+    assert!(
+        line0.contains("no base · gone missing"),
+        "a dormant choice never reads as never-chosen: {line0}"
+    );
+}
+
+#[test]
+fn an_overlong_base_name_truncates_with_an_ellipsis() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    let long = format!("feature/{}", "x".repeat(80));
+    r.git(&["branch", &long]);
+    herdr_reviewr::git::write_base_pick(r.path(), &long).unwrap();
+    r.git(&["checkout", "-q", "-b", "work"]);
+    r.write("hello.rs", "alpha\nBETA\n");
+    r.commit_all("edit");
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    let line0 = dump(&render_size(&app, 80, 20)).lines().next().unwrap().to_string();
+    assert!(line0.contains("vs feature/x"), "the name paints up to the fit: {line0}");
+    assert!(line0.contains('…'), "the overflow truncates with a trailing ellipsis: {line0}");
+    assert!(line0.contains("1 changed"), "the right-aligned stats survive the long name: {line0}");
+}
+
+#[test]
+fn a_narrow_header_never_maps_a_click_outside_the_painted_base() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    let long = format!("feature/{}", "x".repeat(60));
+    r.git(&["branch", &long]);
+    herdr_reviewr::git::write_base_pick(r.path(), &long).unwrap();
+    r.git(&["checkout", "-q", "-b", "work"]);
+    r.write("hello.rs", "alpha\nBETA\n");
+    r.commit_all("edit");
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+
+    // The base label truncates to its budget at a narrow width, and the hit test walks the
+    // same arithmetic the paint does: every column it claims carries painted label, and the
+    // claim is one unbroken run (specs/tui.md).
+    for width in [40u16, 56, 72] {
+        let area = Rect { x: 0, y: 0, width, height: 12 };
+        let line0 = dump(&render_size(&app, width, 12)).lines().next().unwrap().to_string();
+        let cells: Vec<char> = line0.chars().collect();
+        let hits: Vec<u16> = (0..width)
+            .filter(|&c| ui::hit_header(area, &app, app.keymap(), c, 0) == Some(HeaderHit::Base))
+            .collect();
+        let Some((&first, &last)) = hits.first().zip(hits.last()) else {
+            // Too narrow for even one column of the name: the base left the header whole,
+            // so nothing paints a nameless `vs` and nothing claims it (specs/tui.md).
+            assert!(!line0.contains("vs"), "width {width}: a nameless `vs` paints: {line0}");
+            assert!(line0.contains("[branch]"), "width {width}: the scope survives: {line0}");
+            continue;
+        };
+        assert_eq!(
+            hits.len() as u16,
+            last - first + 1,
+            "width {width}: the base claims one unbroken run"
+        );
+        let claimed: String = hits.iter().map(|&c| cells[c as usize]).collect();
+        assert_ne!(claimed.trim(), "vs", "width {width}: a nameless `vs` is claimed: {line0}");
+        assert!(
+            !claimed.ends_with(' '),
+            "width {width}: the claim runs past the painted label: {line0}"
+        );
+        assert_eq!(
+            cells.get(last as usize + 1).copied(),
+            Some(' '),
+            "width {width}: the claim stops short of the painted label: {line0}"
+        );
+    }
+}
+
+#[test]
+fn an_overlong_skipped_tail_never_evicts_the_base_name() {
+    let r = Repo::init();
+    r.write("hello.rs", "alpha\n");
+    r.commit_all("init");
+    r.set_origin_default("main", "main");
+    let long = format!("feature/{}", "x".repeat(80));
+    herdr_reviewr::git::write_base_pick(r.path(), &long).unwrap();
+    r.git(&["checkout", "-q", "-b", "work"]);
+    r.write("hello.rs", "alpha\nBETA\n");
+    r.commit_all("edit");
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    let line0 = dump(&render_size(&app, 80, 20)).lines().next().unwrap().to_string();
+    assert!(line0.contains("vs main"), "the resolved name keeps first claim: {line0}");
+    assert!(line0.contains("· feature/x"), "the skipped tail paints in what remains: {line0}");
+    assert!(line0.contains('…'), "the tail truncates with a trailing ellipsis: {line0}");
+    assert!(line0.contains("1 changed"), "the right-aligned stats survive the long tail: {line0}");
 }
