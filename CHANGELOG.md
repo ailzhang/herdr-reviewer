@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Input IME anchoring.** The terminal cursor follows the comment, search, find, and base-picker
+  insertion points using display-cell widths, keeping CJK IME candidate windows at the input
+  position and avoiding a trailing caret ghost after Backspace deletes a wide character. Thanks
+  [@tomotochi](https://github.com/tomotochi) ([#55](https://github.com/persiyanov/herdr-reviewr/pull/55)).
+- **Comment box caret room.** A comment box too short for its text scrolls to keep the caret row
+  visible, and a comment ending on an exactly-full row grows the box by the empty row the caret
+  waits on.
+
 ## [0.30.2] — 2026-08-12
 
 ### Fixed

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-08-08
+Last edited: 2026-08-13
 ---
 
 # Input
@@ -215,7 +215,15 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - A paste arrives whole via bracketed paste. A multi-line paste keeps its newlines. `\r\n` and `\r` normalize to `\n`.
 - A paste outside the comment editor and the search input is ignored. It never starts or mutates a comment.
 - Movement, insertion, and deletion are character-wise. Multi-byte and wide characters count as whole characters.
+- The terminal cursor follows every field's caret in display cells, anchoring an IME candidate
+  window after wide characters.
+- The painted block caret covers the character under the insertion point. With no character under
+  it, at the end of a logical line or of the input, the terminal cursor alone marks the insertion
+  point.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
+- A box too short for its wrapped rows scrolls to keep the caret row visible.
+- A caret past an exactly-full row sits on the next row's first cell, where the next character
+  lands. Input that ends by exactly filling its last row keeps an empty continuation row for it.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
 
 ### Agent picker
