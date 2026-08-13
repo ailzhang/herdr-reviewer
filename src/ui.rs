@@ -338,18 +338,14 @@ pub fn diff_inner_width(area: Rect, app: &App) -> usize {
     inner_rect(panes(area, app).diff).width as usize
 }
 
-/// The comment box's display lines at `content_w`: each input line word-wrapped, with the
-/// caret drawn as a block at its mapped (row, column). An empty box shows a placeholder.
-fn composer_lines(app: &App, content_w: usize) -> Vec<Line<'static>> {
+/// The comment box's display lines over prebuilt box rows: each input line word-wrapped, with
+/// the caret drawn as a block at its mapped (row, column). An empty box shows a placeholder.
+fn composer_lines(app: &App, content_w: usize, rows: &[(usize, String)]) -> Vec<Line<'static>> {
     let p = app.palette();
     if app.input.is_empty() {
-        return vec![Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Leave a comment…", Style::default().fg(p.overlay0)),
-        ])];
+        return vec![Line::from(input_line("", 0, content_w, "Leave a comment…", p).0)];
     }
-    let rows = box_rows(&app.input, content_w);
-    let (caret_row, caret_col) = caret_rowcol(&rows, app.caret);
+    let (caret_row, caret_col) = caret_rowcol(rows, app.caret);
     rows.iter()
         .enumerate()
         .map(|(i, (_, text))| {
@@ -417,25 +413,33 @@ fn caret_rowcol(rows: &[(usize, String)], caret: usize) -> (usize, usize) {
     (row, (caret - start).min(text.chars().count()))
 }
 
-/// Map the comment caret to its wrapped row and terminal-cell column. The column stays inside
-/// the content width: a caret at the end of an exactly-full row clamps to the last content
-/// cell, never the box border.
-fn composer_caret_cell_position(input: &str, caret: usize, content_w: usize) -> (usize, usize) {
-    let rows = box_rows(input, content_w);
-    let (row, char_col) = caret_rowcol(&rows, caret);
-    let prefix: String = rows[row].1.chars().take(char_col).collect();
-    (row, prefix.width().min(content_w.saturating_sub(1)))
+/// Map the comment caret to its wrapped row and terminal-cell column over prebuilt box rows.
+/// The column stays inside the content width: a caret at the end of an exactly-full row clamps
+/// to the last content cell, never the box border. The single-line inputs reserve the caret's
+/// cells up front instead ([`single_line_caret_view`]), because their view scrolls where this
+/// grid wraps.
+fn composer_caret_cell_position(
+    rows: &[(usize, String)],
+    caret: usize,
+    content_w: usize,
+) -> (usize, usize) {
+    let (row, char_col) = caret_rowcol(rows, caret);
+    let cell_col: usize = rows[row].1.chars().take(char_col).map(|c| plain_cell(c).w).sum();
+    (row, cell_col.min(content_w.saturating_sub(1)))
 }
 
 /// The visible tail of a single-line input and its caret in character and display-cell columns.
+/// The scroll window reserves the caret's own cells, so the character under the insertion point
+/// stays visible and end of input keeps one cell for the terminal cursor.
 fn single_line_caret_view(input: &str, caret: usize, width: usize) -> (String, usize, usize) {
     let chars: Vec<char> = input.chars().collect();
     let caret = caret.min(chars.len());
+    let caret_w = chars.get(caret).map_or(1, |&c| plain_cell(c).w.max(1));
     let mut start = caret;
     let mut caret_cell_col = 0;
-    let before_limit = width.saturating_sub(1); // leave a cell for the terminal cursor
+    let before_limit = width.saturating_sub(caret_w);
     while start > 0 {
-        let cell_w = UnicodeWidthChar::width(chars[start - 1]).unwrap_or(0);
+        let cell_w = plain_cell(chars[start - 1]).w;
         if caret_cell_col + cell_w > before_limit {
             break;
         }
@@ -446,7 +450,7 @@ fn single_line_caret_view(input: &str, caret: usize, width: usize) -> (String, u
     let mut end = start;
     let mut visible_w = 0;
     while end < chars.len() {
-        let cell_w = UnicodeWidthChar::width(chars[end]).unwrap_or(0);
+        let cell_w = plain_cell(chars[end]).w;
         if visible_w + cell_w > width && end > start {
             break;
         }
@@ -454,6 +458,17 @@ fn single_line_caret_view(input: &str, caret: usize, width: usize) -> (String, u
         end += 1;
     }
     (chars[start..end].iter().collect(), caret - start, caret_cell_col)
+}
+
+/// Place the terminal cursor on an input's caret cell inside `area`, anchoring an IME candidate
+/// window at the insertion point (`specs/input.md`). A caret cell outside `area` leaves the
+/// cursor unset, so it stays hidden for the frame.
+fn anchor_input_cursor(frame: &mut Frame, area: Rect, cell_x: usize, cell_y: usize) {
+    let x = area.x.saturating_add(cell_x as u16);
+    let y = area.y.saturating_add(cell_y as u16);
+    if x < area.right() && y < area.bottom() {
+        frame.set_cursor_position(Position::new(x, y));
+    }
 }
 
 /// A single-line input's spans and its caret's display-cell column, relative to the input's
@@ -1505,13 +1520,7 @@ fn render_find_band(frame: &mut Frame, app: &App, area: Rect) {
         line.push_span(Span::styled(count, dim));
     }
     frame.render_widget(Paragraph::new(line), area);
-
-    // The terminal cursor anchors IME candidate windows (`specs/find-in-file.md`).
-    let cursor_x =
-        area.x.saturating_add(label.width() as u16).saturating_add(caret_cell_col as u16);
-    if cursor_x < area.right() {
-        frame.set_cursor_position(Position::new(cursor_x, area.y));
-    }
+    anchor_input_cursor(frame, area, label.width() + caret_cell_col, 0);
 }
 
 /// The inline comment input box, drawn at `area` (under the selection in the diff).
@@ -1525,46 +1534,53 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(p.peach))
         .title(framed_title(&title));
     let content_w = composer_content_width(area.width as usize);
-    let body = Paragraph::new(composer_lines(app, content_w)).block(block);
+    let rows = box_rows(&app.input, content_w);
+    let body = Paragraph::new(composer_lines(app, content_w, &rows)).block(block);
     frame.render_widget(body, area);
 
-    // The terminal cursor anchors IME candidate windows, so it follows the painted caret
-    // in display-cell coordinates (`specs/input.md`).
-    let (caret_row, caret_col) = composer_caret_cell_position(&app.input, app.caret, content_w);
-    let cursor_x = area.x.saturating_add(1).saturating_add(caret_col as u16);
-    let cursor_y = area.y.saturating_add(1).saturating_add(caret_row as u16);
-    if cursor_x < area.right() && cursor_y < area.bottom() {
-        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
-    }
+    let (caret_row, caret_col) = composer_caret_cell_position(&rows, app.caret, content_w);
+    anchor_input_cursor(frame, inner_rect(area), caret_col, caret_row);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{composer_caret_cell_position, single_line_caret_view};
+    use super::{box_rows, composer_caret_cell_position, single_line_caret_view};
+
+    /// The production pairing: box rows built at the same width the caret maps against.
+    fn caret_cell(input: &str, caret: usize, content_w: usize) -> (usize, usize) {
+        composer_caret_cell_position(&box_rows(input, content_w), caret, content_w)
+    }
 
     #[test]
     fn comment_caret_uses_display_cells() {
-        assert_eq!(composer_caret_cell_position("abc", 3, 20), (0, 3));
-        assert_eq!(composer_caret_cell_position("日本", 2, 20), (0, 4));
-        assert_eq!(composer_caret_cell_position("a日本b", 3, 20), (0, 5));
+        assert_eq!(caret_cell("abc", 3, 20), (0, 3));
+        assert_eq!(caret_cell("日本", 2, 20), (0, 4));
+        assert_eq!(caret_cell("a日本b", 3, 20), (0, 5));
     }
 
     #[test]
     fn comment_caret_follows_the_existing_wrap_rows() {
         // `a日` fills three cells, so `本b` starts the next row at cell zero.
-        assert_eq!(composer_caret_cell_position("a日本b", 3, 3), (1, 2));
+        assert_eq!(caret_cell("a日本b", 3, 3), (1, 2));
     }
 
     #[test]
     fn comment_caret_clamps_inside_an_exactly_full_row() {
-        assert_eq!(composer_caret_cell_position("abc", 3, 3), (0, 2));
-        assert_eq!(composer_caret_cell_position("日本", 2, 4), (0, 3));
+        assert_eq!(caret_cell("abc", 3, 3), (0, 2));
+        assert_eq!(caret_cell("日本", 2, 4), (0, 3));
     }
 
     #[test]
     fn single_line_caret_view_uses_display_cells() {
         assert_eq!(single_line_caret_view("abcdef", 6, 4), ("def".to_string(), 3, 3));
         assert_eq!(single_line_caret_view("a日本b", 3, 4), ("本b".to_string(), 1, 2));
+    }
+
+    #[test]
+    fn a_scrolled_view_keeps_the_wide_character_under_the_caret() {
+        // The caret sits on `日` in a scrolled view: the window reserves its two cells, so
+        // the character stays visible under the caret block.
+        assert_eq!(single_line_caret_view("abcdef日x", 6, 4), ("ef日".to_string(), 2, 2));
     }
 }
 
@@ -2193,11 +2209,7 @@ fn render_base_picker(frame: &mut Frame, app: &App, area: Rect) {
     let mut filter = Line::from(filter_spans);
     filter.spans.insert(0, Span::styled(" ", text_style(p)));
     frame.render_widget(Paragraph::new(filter), Rect { height: 1, ..inner });
-    // The terminal cursor anchors IME candidate windows (`specs/input.md`).
-    let cursor_x = inner.x.saturating_add(1).saturating_add(caret_cell_col as u16);
-    if cursor_x < inner.right() {
-        frame.set_cursor_position(Position::new(cursor_x, inner.y));
-    }
+    anchor_input_cursor(frame, inner, 1 + caret_cell_col, 0);
 
     let list_area = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
     let filtered = bp.filtered();
@@ -2394,11 +2406,7 @@ fn render_search(frame: &mut Frame, app: &App, body: Rect) {
     input.spans.insert(0, Span::styled("> ", Style::default().fg(p.peach)));
     let input_area = Rect::new(l.band.x, l.band.y, query_w, l.band.height);
     frame.render_widget(Paragraph::new(input), input_area);
-    // The terminal cursor anchors IME candidate windows (`specs/search.md`).
-    let cursor_x = input_area.x.saturating_add(2).saturating_add(caret_cell_col as u16);
-    if cursor_x < input_area.right() {
-        frame.set_cursor_position(Position::new(cursor_x, input_area.y));
-    }
+    anchor_input_cursor(frame, input_area, 2 + caret_cell_col, 0);
     if l.band.width > chips_w {
         frame.render_widget(
             Paragraph::new(chips),

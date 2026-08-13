@@ -171,6 +171,22 @@ fn the_base_picker_anchors_the_terminal_cursor_at_its_caret() {
 }
 
 #[test]
+fn a_height_capped_composer_never_puts_the_cursor_on_a_border() {
+    let mut app = edited_app();
+    composing(&mut app);
+    for _ in 0..600 {
+        app.input_push('x');
+    }
+    let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+    let cursor = terminal.backend().cursor_position();
+    let cell = terminal.backend().buffer().cell(cursor).unwrap();
+    let glyph = cell.symbol().chars().next().unwrap_or(' ');
+    assert!(!"─│┌┐└┘".contains(glyph), "the cursor sits on the border glyph {glyph:?}");
+}
+
+#[test]
 fn caret_vertical_moves_between_wrapped_rows() {
     // "abcdef" hard-wraps at width 3 to "abc"/"def"; caret 4 (def col 1) up → 1; 1 down → 4.
     assert_eq!(ui::caret_vertical("abcdef", 4, 3, false), 1);

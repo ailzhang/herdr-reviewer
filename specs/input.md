@@ -217,8 +217,9 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - Movement, insertion, and deletion are character-wise. Multi-byte and wide characters count as whole characters.
 - The terminal cursor follows every field's caret in display cells, anchoring an IME candidate
   window after wide characters.
-- The painted block caret covers a character under the insertion point. At the end of input, the
-  terminal cursor alone marks the insertion point.
+- The painted block caret covers the character under the insertion point. With no character under
+  it, at the end of a logical line or of the input, the terminal cursor alone marks the insertion
+  point.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
 
