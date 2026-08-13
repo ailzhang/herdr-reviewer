@@ -520,7 +520,13 @@ fn input_line(
 #[must_use]
 pub fn caret_vertical(input: &str, caret: usize, content_w: usize, down: bool) -> usize {
     let rows = box_rows(input, content_w);
-    let (row, col) = caret_rowcol(&rows, caret);
+    let (mut row, mut col) = caret_rowcol(&rows, caret);
+    // Step from the caret's visual row: past an exactly-full row it sits on the next row's
+    // first cell ([`composer_caret_cell_position`]), and motion must agree with the cursor.
+    if composer_caret_cell_position(&rows, (row, col), content_w).0 > row {
+        row += 1;
+        col = 0;
+    }
     let target = if down { (row + 1).min(rows.len() - 1) } else { row.saturating_sub(1) };
     let (start, text) = &rows[target];
     start + col.min(text.chars().count())

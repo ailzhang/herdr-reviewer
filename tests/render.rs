@@ -249,6 +249,9 @@ fn caret_vertical_moves_between_wrapped_rows() {
     // A line exactly filling the width adds no phantom row, so one step crosses it.
     assert_eq!(ui::caret_vertical("abc\ndef", 0, 3, true), 4);
     assert_eq!(ui::caret_vertical("abc\ndef", 4, 3, false), 0);
+    // The caret past the full line sits visually on the next row, and motion agrees.
+    assert_eq!(ui::caret_vertical("abc\ndef", 3, 3, false), 0);
+    assert_eq!(ui::caret_vertical("abc\ndef", 3, 3, true), 7);
 }
 
 #[test]
