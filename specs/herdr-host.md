@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-12
+Last edited: 2026-08-13
 ---
 
 # herdr host
@@ -65,7 +65,7 @@ toggle_direction = "down"      # right | down, split only         (default: righ
 auto_open = false              # auto-open on worktree.created    (default: true)
 ```
 
-A manual open keeps focus on the agent for `split`, and gives focus to reviewr otherwise. The event auto-opens `split` and `tab` only, never takes focus, and does nothing with `auto_open = false`. Like `open`, the event opens nothing when the workspace already holds a reviewr pane. The event acts on the workspace its payload names, never the focused one. A missing key uses its default. Invalid plugin config follows `config.md`.
+A manual open gives focus to reviewr. The event auto-opens `split` and `tab` only, never takes focus, and does nothing with `auto_open = false`. Like `open`, the event opens nothing when the workspace already holds a reviewr pane. The event acts on the workspace its payload names, never the focused one. A missing key uses its default. Invalid plugin config follows `config.md`.
 
 | placement | direction         | covers the pane |
 | --------- | ----------------- | --------------- |

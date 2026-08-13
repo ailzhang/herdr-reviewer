@@ -782,6 +782,52 @@ fn auto_open_takes_the_event_payload_cwd_over_the_live_one() {
 }
 
 #[test]
+fn a_manual_open_passes_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    let context = serde_json::json!({"focused_pane_cwd": env!("CARGO_MANIFEST_DIR")}).to_string();
+
+    for mode in ["open", "toggle"] {
+        let _ = fs::remove_file(&log);
+        let output = run_with_context(mode, dir.path(), &herdr, &context);
+        assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        let calls = fs::read_to_string(&log).unwrap();
+        let tokens: Vec<&str> = calls.split_whitespace().collect();
+        assert!(tokens.contains(&"--focus"), "{mode} must pass --focus: {calls}");
+        assert!(!tokens.contains(&"--no-focus"), "{mode} must not pass --no-focus: {calls}");
+    }
+}
+
+#[test]
+fn auto_open_passes_no_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    let event = serde_json::json!({
+        "data": {"workspace": {
+            "workspace_id": "workspace-9",
+            "worktree": {"checkout_path": env!("CARGO_MANIFEST_DIR")},
+        }},
+    })
+    .to_string();
+
+    let output = Command::new("bash")
+        .arg("herdr/pane.sh")
+        .arg("auto-open")
+        .env("HERDR_REVIEWR_BIN", reviewr_bin())
+        .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_EVENT_JSON", &event)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    let tokens: Vec<&str> = calls.split_whitespace().collect();
+    assert!(tokens.contains(&"--no-focus"), "auto-open must pass --no-focus: {calls}");
+    assert!(!tokens.contains(&"--focus"), "auto-open must not pass --focus: {calls}");
+}
+
+#[test]
 fn split_placement_open_renames_no_tab() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("config.toml"), "toggle_placement = \"split\"\n").unwrap();

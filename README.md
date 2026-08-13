@@ -361,13 +361,13 @@ toggle_placement = "overlay"   # split | overlay | zoomed | tab   (default: spli
 toggle_direction = "down"      # right | down — split only        (default: right)
 ```
 
-- **`split`** sits next to your agent and leaves the keyboard with it. `toggle_direction` puts
+- **`split`** sits next to your agent and takes the keyboard. `toggle_direction` puts
   reviewr on the right (default) or below.
 - **`overlay`** covers the tab and takes the keyboard. Toggle again to drop back.
 - **`zoomed`** fills the tab like overlay and takes the keyboard.
 - **`tab`** opens its own tab and takes the keyboard.
 
-New worktrees auto-open only `split` and `tab`. `overlay` and `zoomed` wait for your toggle.
+New worktrees auto-open only `split` and `tab`, and never take the keyboard. `overlay` and `zoomed` wait for your toggle.
 An unrecognized value invalidates the config.
 
 ### Auto-open and layout plugins

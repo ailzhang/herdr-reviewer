@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.4] — 2026-08-13
+
+### Changed
+- **A split open takes the keyboard.** Toggle and open focus reviewr in every placement,
+  including split. A new worktree still never steals focus
+  ([#61](https://github.com/persiyanov/herdr-reviewr/issues/61)).
+
 ## [0.30.3] — 2026-08-13
 
 ### Fixed

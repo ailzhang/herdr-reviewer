@@ -245,9 +245,9 @@ elif ! is_git_repo "$cwd"; then
   refuse "not a git repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
 fi
 
-# Focus follows the placement on a manual open; the event never takes it (spec A3, P5, P6).
+# A manual open takes focus. The event never does (specs/herdr-host.md).
 focus=--no-focus
-[ "$mode" != auto-open ] && [ "$placement" != "split" ] && focus=--focus
+[ "$mode" != auto-open ] && focus=--focus
 
 # Placement decides the pane-open shape (spec: Pane placement). A split or zoomed
 # open attaches to the focused pane, else the workspace's first pane.
