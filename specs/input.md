@@ -221,6 +221,7 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
   it, at the end of a logical line or of the input, the terminal cursor alone marks the insertion
   point.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
+- A box too short for its wrapped rows scrolls to keep the caret row visible.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
 
 ### Agent picker

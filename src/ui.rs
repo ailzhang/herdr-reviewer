@@ -1535,11 +1535,15 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
         .title(framed_title(&title));
     let content_w = composer_content_width(area.width as usize);
     let rows = box_rows(&app.input, content_w);
-    let body = Paragraph::new(composer_lines(app, content_w, &rows)).block(block);
-    frame.render_widget(body, area);
-
+    let inner = inner_rect(area);
     let (caret_row, caret_col) = composer_caret_cell_position(&rows, app.caret, content_w);
-    anchor_input_cursor(frame, inner_rect(area), caret_col, caret_row);
+    // A box too short for its rows scrolls to keep the caret row visible (`specs/input.md`).
+    let scroll = caret_row.saturating_sub((inner.height as usize).saturating_sub(1));
+    let body = Paragraph::new(composer_lines(app, content_w, &rows))
+        .block(block)
+        .scroll((scroll as u16, 0));
+    frame.render_widget(body, area);
+    anchor_input_cursor(frame, inner, caret_col, caret_row - scroll);
 }
 
 #[cfg(test)]

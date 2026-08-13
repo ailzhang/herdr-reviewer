@@ -171,7 +171,7 @@ fn the_base_picker_anchors_the_terminal_cursor_at_its_caret() {
 }
 
 #[test]
-fn a_height_capped_composer_never_puts_the_cursor_on_a_border() {
+fn a_height_capped_composer_scrolls_to_keep_the_caret_visible() {
     let mut app = edited_app();
     composing(&mut app);
     for _ in 0..600 {
@@ -181,9 +181,12 @@ fn a_height_capped_composer_never_puts_the_cursor_on_a_border() {
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
     let cursor = terminal.backend().cursor_position();
-    let cell = terminal.backend().buffer().cell(cursor).unwrap();
-    let glyph = cell.symbol().chars().next().unwrap_or(' ');
-    assert!(!"─│┌┐└┘".contains(glyph), "the cursor sits on the border glyph {glyph:?}");
+    assert_ne!((cursor.x, cursor.y), (0, 0), "the cursor is placed");
+    let buffer = terminal.backend().buffer();
+    let before = buffer.cell((cursor.x - 1, cursor.y)).unwrap();
+    assert_eq!(before.symbol(), "x", "the cursor sits right after the typed text");
+    let under = buffer.cell(cursor).unwrap();
+    assert_eq!(under.symbol(), " ", "end of input leaves the cursor cell blank");
 }
 
 #[test]
