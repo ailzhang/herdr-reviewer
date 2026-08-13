@@ -66,6 +66,39 @@ fn procinfo(dir: &Path, pane: &str, entries: &str) {
     .unwrap();
 }
 
+/// A fresh git repo at `dir/name`, for tests that need a real second repo beside the
+/// crate's own.
+fn init_repo(dir: &Path, name: &str) -> PathBuf {
+    let repo = dir.join(name);
+    fs::create_dir(&repo).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .arg("init")
+            .arg("-q")
+            .arg("-b")
+            .arg("main")
+            .status()
+            .unwrap()
+            .success()
+    );
+    repo
+}
+
+/// One `pane list` answer: a single pane whose entry carries a live `foreground_cwd`,
+/// in the live envelope shape (docs/herdr-api-notes.md).
+fn pane_with_cwd(dir: &Path, pane: &str, foreground_cwd: &Path) {
+    fs::write(
+        dir.join("panes.json"),
+        format!(
+            r#"{{"result":{{"panes":[{{"pane_id":"{pane}","foreground_cwd":"{cwd}"}}]}}}}"#,
+            cwd = foreground_cwd.display(),
+        ),
+    )
+    .unwrap();
+}
+
 fn run(mode: &str, config_dir: &Path, herdr: &Path) -> Output {
     Command::new("bash")
         .arg("herdr/pane.sh")
@@ -82,15 +115,20 @@ fn run(mode: &str, config_dir: &Path, herdr: &Path) -> Output {
 /// placement and `plugin pane open` stages.
 fn run_open(config_dir: &Path, herdr: &Path) -> Output {
     let context = serde_json::json!({"focused_pane_cwd": env!("CARGO_MANIFEST_DIR")}).to_string();
+    run_with_context("open", config_dir, herdr, &context)
+}
+
+/// Any mode with a caller-shaped action context.
+fn run_with_context(mode: &str, config_dir: &Path, herdr: &Path, context: &str) -> Output {
     Command::new("bash")
         .arg("herdr/pane.sh")
-        .arg("open")
+        .arg(mode)
         .env("HERDR_REVIEWR_BIN", reviewr_bin())
         .env("HERDR_PLUGIN_CONFIG_DIR", config_dir)
         .env("HERDR_BIN_PATH", herdr)
         .env("HERDR_WORKSPACE_ID", "workspace-1")
         .env("HERDR_PANE_ID", "w1:p1")
-        .env("HERDR_PLUGIN_CONTEXT_JSON", &context)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context)
         .output()
         .unwrap()
 }
@@ -539,6 +577,208 @@ fn tab_placement_open_names_its_fresh_tab() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let calls = fs::read_to_string(&log).unwrap();
     assert!(calls.contains("tab rename w1:t9 reviewr"), "{calls}");
+}
+
+// --- Open cwd: the focused pane's live foreground cwd, then the context's launch cwd.
+
+#[test]
+fn open_prefers_the_focused_panes_live_foreground_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The launch cwd is not a git repo: an open that trusted it would refuse. The pane's
+    // live foreground cwd is the reviewed repo — the `claude -w <worktree>` shape, where
+    // the agent chdirs into the worktree only inside its own process after launching
+    // from the main checkout. The live cwd comes from the pane-list snapshot, so the
+    // open pays no extra herdr call.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+    pane_with_cwd(dir.path(), "w1:p1", Path::new(env!("CARGO_MANIFEST_DIR")));
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must use the live foreground cwd: {calls}"
+    );
+    // The live cwd comes from the run's one snapshot; a second listing would put a herdr
+    // round-trip back on the keypress path.
+    assert_eq!(
+        calls.matches("pane list --workspace").count(),
+        1,
+        "the open must reuse the held pane-list snapshot: {calls}"
+    );
+}
+
+#[test]
+fn open_prefers_the_live_cwd_when_the_launch_cwd_is_also_a_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The motivating shape exactly: the launch cwd is itself a valid repo (the main
+    // checkout `claude -w <worktree>` was launched from), so a fallback-only read would
+    // pass every other test and still review the wrong repo. The live cwd must win.
+    let launch_repo = init_repo(dir.path(), "main-checkout");
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": launch_repo.to_str().unwrap(),
+    })
+    .to_string();
+    pane_with_cwd(dir.path(), "w1:p1", Path::new(env!("CARGO_MANIFEST_DIR")));
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the live cwd must win over a launch cwd that is also a repo: {calls}"
+    );
+}
+
+#[test]
+fn open_keeps_the_context_cwd_without_a_live_foreground_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The fake's default pane-list entry carries no foreground cwd — a pane whose live
+    // read has nothing to add keeps the context cwd instead of losing it.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": env!("CARGO_MANIFEST_DIR"),
+    })
+    .to_string();
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must fall back to the context cwd: {calls}"
+    );
+}
+
+#[test]
+fn a_toggle_open_falls_back_when_the_live_cwd_is_not_a_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The live foreground cwd sits outside any git repo — a shell that wandered off. The
+    // live cwd wins only inside a repo; here it yields to the context cwd rather than
+    // refusing an open the context alone could place (specs/herdr-host.md, Repo
+    // discovery). Run as a toggle, so the opening toggle exercises the same block.
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": env!("CARGO_MANIFEST_DIR"),
+    })
+    .to_string();
+    pane_with_cwd(dir.path(), "w1:p1", dir.path());
+
+    let output = run_with_context("toggle", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "a non-repo live cwd must fall back to the context cwd: {calls}"
+    );
+}
+
+#[test]
+fn open_takes_the_focused_panes_cwd_not_another_panes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // Two panes, both in repos: a decoy listed first and the focused pane after it. The
+    // lookup must key on the focused pane's id — a first-entry read would review the
+    // decoy's repo.
+    let decoy_repo = init_repo(dir.path(), "decoy-repo");
+    fs::write(
+        dir.path().join("panes.json"),
+        format!(
+            r#"{{"result":{{"panes":[{{"pane_id":"w1:p0","foreground_cwd":"{decoy}"}},{{"pane_id":"w1:p1","foreground_cwd":"{focused}"}}]}}}}"#,
+            decoy = decoy_repo.display(),
+            focused = env!("CARGO_MANIFEST_DIR"),
+        ),
+    )
+    .unwrap();
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the open must use the focused pane's cwd, not the decoy's: {calls}"
+    );
+}
+
+#[test]
+fn a_refusal_names_the_rejected_live_cwd_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, _log) = fake_herdr(dir.path());
+    // No context cwd and a non-repo live cwd: the open refuses, and the one stderr line
+    // names the live directory it inspected and rejected — a refusal that hid it would
+    // read as if no directory was ever tried.
+    let context = serde_json::json!({"focused_pane_id": "w1:p1"}).to_string();
+    pane_with_cwd(dir.path(), "w1:p1", dir.path());
+
+    let output = run_with_context("open", dir.path(), &herdr, &context);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a git repo"), "{stderr}");
+    assert!(
+        stderr.contains(dir.path().to_str().unwrap()),
+        "the refusal must name the rejected live cwd: {stderr}"
+    );
+}
+
+#[test]
+fn auto_open_takes_the_event_payload_cwd_over_the_live_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The focused pane's live cwd is a real git repo, so only the mode guard keeps it
+    // from winning: the event open takes its directory from the payload alone
+    // (specs/herdr-host.md, Repo discovery).
+    let live_repo = init_repo(dir.path(), "live-repo");
+    pane_with_cwd(dir.path(), "w1:p1", &live_repo);
+    let context = serde_json::json!({
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": dir.path().to_str().unwrap(),
+    })
+    .to_string();
+    let event = serde_json::json!({
+        "data": {"workspace": {
+            "workspace_id": "workspace-9",
+            "worktree": {"checkout_path": env!("CARGO_MANIFEST_DIR")},
+        }},
+    })
+    .to_string();
+
+    let output = Command::new("bash")
+        .arg("herdr/pane.sh")
+        .arg("auto-open")
+        .env("HERDR_REVIEWR_BIN", reviewr_bin())
+        .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
+        .env("HERDR_BIN_PATH", &herdr)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", &context)
+        .env("HERDR_PLUGIN_EVENT_JSON", &event)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains(&format!("--cwd {}", env!("CARGO_MANIFEST_DIR"))),
+        "the event open must use the payload cwd: {calls}"
+    );
 }
 
 #[test]

@@ -96,8 +96,14 @@ herdr plugin pane close <pane_id>
 herdr runs plugin commands with a minimal `PATH`; prepend common bin dirs for `jq`/`git`.
 
 - **Action context** (`HERDR_PLUGIN_CONTEXT_JSON`): `workspace_id`, `tab_id`, `focused_pane_id`,
-  `focused_pane_cwd`, `worktree:{repo_root, checkout_path, ...}`. `pane.sh` reads
-  `focused_pane_cwd` to place a manual open; the binary reads none of it.
+  `focused_pane_cwd`, `worktree:{repo_root, checkout_path, ...}`. `pane.sh` places a manual
+  open from the focused pane's cwd; the binary reads none of it.
+- **`focused_pane_cwd` is the pane's *launch* cwd, not its live one** (observed, 0.7.5: a pane
+  running `claude -w <worktree>` reported the main checkout it was launched from, while the
+  agent process had chdir'd into the worktree). `herdr pane get <id>` carries both: `.result.pane.cwd`
+  (launch) and `.result.pane.foreground_cwd` (live foreground process). A `pane list` entry carries
+  `foreground_cwd` too (see above), so `pane.sh` reads it from the pane-list snapshot it already
+  holds and falls back to the context cwd.
 - **`plugin action invoke` resolves context from the focused workspace**, wherever it is run — the
   calling pane's `HERDR_*` env is ignored, and `invoke <action_id> [--plugin ID]` has no workspace
   selector (verified live, 0.7.1: invoked from pane `w1X:p1`, context arrived for focused `w1B`).

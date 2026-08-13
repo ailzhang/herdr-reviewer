@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-07-31
+Last edited: 2026-08-12
 ---
 
 # herdr host
@@ -88,6 +88,8 @@ A `tab` open names the fresh tab `reviewr`, using the `tab_id` the pane-open res
 ## Repo discovery
 
 The binary reviews its own pane's working directory, normalized to its git top level. A directory outside any repository shows an empty state.
+
+A manual open prefers the focused pane's live foreground directory over its recorded launch directory. Launch a `claude -w <worktree>` pane from the main checkout, and the open reviews the worktree. A live directory outside any git repository falls back to the launch directory. A failed or empty live read falls back the same way. The open refuses only when no candidate directory is inside a git repository. The refusal names every directory it rejected. The event open takes its directory from the event payload. It reads no pane.
 
 ## Sending to the agent
 

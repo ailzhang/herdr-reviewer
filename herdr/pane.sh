@@ -226,9 +226,23 @@ open | auto-open)
   ;;
 esac
 
-# Opening from here on. Only inside a git repo.
-if [ -z "$cwd" ] || ! git -C "$cwd" rev-parse --show-toplevel >/dev/null 2>&1; then
-  refuse "not a git repo: '${cwd:-<no cwd>}'"
+# Opening from here on. Prefer the focused pane's live `foreground_cwd`, read from the
+# pane-list snapshot already in hand, over the context's launch cwd (specs/herdr-host.md,
+# Repo discovery; the launch-vs-live split is docs/herdr-api-notes.md). The mode guard
+# keeps auto-open on the event payload's cwd set above.
+is_git_repo() { [ -n "$1" ] && git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1; }
+live=""
+if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+  fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
+  [ -z "$fp" ] || live=$(printf '%s' "$panes_json" |
+    jq -r --arg p "$fp" 'first(.result.panes[] | select(.pane_id == $p) | .foreground_cwd // empty)' 2>/dev/null)
+fi
+if is_git_repo "$live"; then
+  cwd="$live"
+elif ! is_git_repo "$cwd"; then
+  # Name every candidate the check rejected, or a refusal over an inspected-but-unusable
+  # live cwd would read as if no directory was ever tried.
+  refuse "not a git repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
 fi
 
 # Focus follows the placement on a manual open; the event never takes it (spec A3, P5, P6).
