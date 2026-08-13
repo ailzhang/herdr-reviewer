@@ -222,8 +222,8 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
   point.
 - `↑`/`↓` move by wrapped rows. `Home`/`End` and the kill keys act on the logical line, the run of text between explicit newlines.
 - A box too short for its wrapped rows scrolls to keep the caret row visible.
-- A line that exactly fills its last wrapped row keeps an empty continuation row, where the caret
-  at the line's end sits.
+- A caret past an exactly-full row sits on the next row's first cell, where the next character
+  lands. Input that ends by exactly filling its last row keeps an empty continuation row for it.
 - `Alt+b`/`Alt+f` always survive as ESC-prefixed sequences. The modified arrows work where the terminal delivers them. The character arrows, `Home`/`End`, and `Ctrl+A`/`Ctrl+E` always work.
 
 ### Agent picker

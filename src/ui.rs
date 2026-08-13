@@ -339,7 +339,9 @@ pub fn diff_inner_width(area: Rect, app: &App) -> usize {
 }
 
 /// The comment box's display lines over prebuilt box rows: each input line word-wrapped, with
-/// the caret drawn as a block at its mapped (row, column). An empty box shows a placeholder.
+/// the caret drawn as a block over the character at its mapped (row, column) — with no
+/// character under it, the terminal cursor alone marks it (`specs/input.md`). An empty box
+/// shows a placeholder.
 fn composer_lines(
     app: &App,
     content_w: usize,
@@ -393,10 +395,12 @@ fn box_rows(input: &str, width: usize) -> Vec<(usize, String)> {
         for &(a, b) in &segments {
             rows.push((i + a, chars[i + a..i + b].iter().collect::<String>()));
         }
-        // A line whose last row exactly fills the width keeps an empty continuation row: the
-        // caret at the line's end lives there, where the next character lands, so every legal
-        // caret position has a row (`specs/input.md`).
-        if let Some(&(a, b)) = segments.last()
+        // Input that ends by exactly filling its last row keeps an empty continuation row: the
+        // caret at the end lives there, where the next character lands (`specs/input.md`). A
+        // full line before a newline adds no row — the next line's row exists already, and the
+        // caret past the full row sits on its first cell.
+        if line_end == chars.len()
+            && let Some(&(a, b)) = segments.last()
             && cells[a..b].iter().map(|c| c.w).sum::<usize>() == width
         {
             rows.push((line_end, String::new()));
@@ -427,14 +431,23 @@ fn caret_rowcol(rows: &[(usize, String)], caret: usize) -> (usize, usize) {
 }
 
 /// Map a caret's `(row, char column)` to its terminal cell over prebuilt box rows
-/// (`specs/input.md`). Every legal caret has a cell inside the content width, because
-/// [`box_rows`] keeps a continuation row after an exactly-full row.
+/// (`specs/input.md`). A caret past an exactly-full row sits on the next row's first cell,
+/// where the next character lands — [`box_rows`] guarantees that row mid-comment, and keeps
+/// a continuation row when the input ends that way. The final clamp fires only for an
+/// over-wide glyph hard-broken past a narrower box.
 fn composer_caret_cell_position(
     rows: &[(usize, String)],
     (row, char_col): (usize, usize),
+    content_w: usize,
 ) -> (usize, usize) {
     let cell_col: usize = rows[row].1.chars().take(char_col).map(|c| plain_cell(c).w).sum();
-    (row, cell_col)
+    if cell_col < content_w {
+        (row, cell_col)
+    } else if row + 1 < rows.len() {
+        (row + 1, 0)
+    } else {
+        (row, content_w.saturating_sub(1))
+    }
 }
 
 /// The visible tail of a single-line input and its caret in character and display-cell columns
@@ -1548,7 +1561,7 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
     let rows = box_rows(&app.input, content_w);
     let inner = inner_rect(area);
     let rowcol = caret_rowcol(&rows, app.caret);
-    let (cursor_row, cursor_col) = composer_caret_cell_position(&rows, rowcol);
+    let (cursor_row, cursor_col) = composer_caret_cell_position(&rows, rowcol, content_w);
     // A box too short for its rows scrolls to keep the caret row visible (`specs/input.md`).
     let scroll = cursor_row.saturating_sub((inner.height as usize).saturating_sub(1));
     let body = Paragraph::new(composer_lines(app, content_w, &rows, rowcol))
@@ -1565,7 +1578,7 @@ mod tests {
     /// The production pairing: box rows built at the same width the caret maps against.
     fn caret_cell(input: &str, caret: usize, content_w: usize) -> (usize, usize) {
         let rows = box_rows(input, content_w);
-        composer_caret_cell_position(&rows, caret_rowcol(&rows, caret))
+        composer_caret_cell_position(&rows, caret_rowcol(&rows, caret), content_w)
     }
 
     #[test]
@@ -1582,21 +1595,23 @@ mod tests {
     }
 
     #[test]
-    fn a_full_rows_end_maps_to_its_continuation_row() {
-        // The next typed character lands on the continuation row, so the cursor waits
-        // there, never on the box border and never on a neighboring character.
+    fn a_full_rows_end_maps_to_the_next_rows_first_cell() {
+        // The next typed character lands on the next row's first cell, so the cursor waits
+        // there, never on the box border: input ending on a full row gets its continuation
+        // row, and a full line mid-comment shares the next line's first cell.
         assert_eq!(caret_cell("abc", 3, 3), (1, 0));
         assert_eq!(caret_cell("日本", 2, 4), (1, 0));
-        // A full line mid-comment keeps its own continuation row, so its end never maps
-        // onto the next line's first character.
         assert_eq!(caret_cell("abc\ndef", 3, 3), (1, 0));
-        assert_eq!(caret_cell("abc\ndef", 4, 3), (2, 0));
+        assert_eq!(caret_cell("abc\ndef", 4, 3), (1, 0));
     }
 
     #[test]
-    fn a_full_row_grows_the_box_by_its_continuation_row() {
+    fn only_input_ending_on_a_full_row_grows_a_continuation_row() {
         assert_eq!(box_rows("abc", 3).len(), 2);
         assert_eq!(box_rows("ab", 3).len(), 1);
+        // A full line before a newline adds no phantom blank row between the lines.
+        assert_eq!(box_rows("abc\ndef", 3).len(), 3);
+        assert_eq!(box_rows("abc\n", 3).len(), 2);
     }
 
     #[test]

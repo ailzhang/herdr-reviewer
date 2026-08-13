@@ -130,10 +130,16 @@ fn backspacing_a_wide_character_leaves_the_terminal_cursor_unpainted() {
     let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
+    let before = terminal.backend().cursor_position();
     app.input_backspace();
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
     let cursor = terminal.backend().cursor_position();
+    assert_eq!(
+        (cursor.x + 2, cursor.y),
+        (before.x, before.y),
+        "the cursor retreats one wide character"
+    );
     let cell = terminal.backend().buffer().cell(cursor).unwrap();
     assert_eq!(cell.bg, ratatui::style::Color::Reset);
     assert_eq!(cell.symbol(), " ");
@@ -174,24 +180,62 @@ fn the_base_picker_anchors_the_terminal_cursor_at_its_caret() {
 fn a_height_capped_composer_scrolls_to_keep_the_caret_visible() {
     let mut app = edited_app();
     composing(&mut app);
-    for _ in 0..600 {
+    for _ in 0..599 {
         app.input_push('x');
     }
+    app.input_push('z'); // the unique last character locates the caret in the buffer
     let mut terminal = Terminal::new(TestBackend::new(60, 12)).unwrap();
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
-    let cursor = terminal.backend().cursor_position();
-    assert_ne!((cursor.x, cursor.y), (0, 0), "the cursor is placed");
     let buffer = terminal.backend().buffer();
-    let under = buffer.cell(cursor).unwrap();
-    assert_eq!(under.symbol(), " ", "end of input leaves the cursor cell blank");
-    // The last typed character sits one cell left of the cursor, or ends the row above
-    // when the caret wrapped to a fresh row.
-    let before = buffer.cell((cursor.x - 1, cursor.y)).unwrap();
-    let wrapped = (0..buffer.area.width)
-        .filter_map(|x| buffer.cell((x, cursor.y - 1)))
-        .any(|cell| cell.symbol() == "x");
-    assert!(before.symbol() == "x" || wrapped, "the cursor sits right after the typed text");
+    let cursor = terminal.backend().cursor_position();
+    let (zx, zy) = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .find(|&(x, y)| buffer.cell((x, y)).unwrap().symbol() == "z")
+        .expect("the box scrolled the last typed character into view");
+    // The cursor sits where the next character lands: right after `z`, or on the first
+    // text column of the fresh row below when `z` exactly filled its row.
+    let inline = (cursor.x, cursor.y) == (zx + 1, zy);
+    let row_start =
+        (0..buffer.area.width).find(|&x| buffer.cell((x, zy)).unwrap().symbol() == "x").unwrap();
+    let wrapped = (cursor.x, cursor.y) == (row_start, zy + 1);
+    assert!(
+        inline || wrapped,
+        "the cursor sits after the text (cursor {cursor:?}, z at ({zx},{zy}))"
+    );
+    assert_eq!(
+        buffer.cell(cursor).unwrap().symbol(),
+        " ",
+        "end of input leaves the cursor cell blank"
+    );
+}
+
+#[test]
+fn the_find_band_anchors_the_terminal_cursor_at_its_caret() {
+    let r = Repo::init();
+    r.write("base.txt", "x\n");
+    r.commit_all("init");
+    r.write("m.rs", "let total = 1;\n");
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    let keymap = Keymap::default();
+    let area = Rect::new(0, 0, 140, 40);
+    handle_key(&mut app, KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL), area, &keymap)
+        .unwrap();
+
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+    let empty = terminal.backend().cursor_position();
+
+    handle_key(&mut app, KeyEvent::from(KeyCode::Char('日')), area, &keymap).unwrap();
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+    let after = terminal.backend().cursor_position();
+    assert_eq!(
+        (after.x, after.y),
+        (empty.x + 2, empty.y),
+        "the cursor advances one wide character"
+    );
 }
 
 #[test]
@@ -202,6 +246,9 @@ fn caret_vertical_moves_between_wrapped_rows() {
     // Composer wrapping preserves repeated spaces so every caret index remains addressable.
     assert_eq!(ui::caret_vertical("ab  cd", 4, 2, false), 2);
     assert_eq!(ui::caret_vertical("ab  cd", 2, 2, true), 4);
+    // A line exactly filling the width adds no phantom row, so one step crosses it.
+    assert_eq!(ui::caret_vertical("abc\ndef", 0, 3, true), 4);
+    assert_eq!(ui::caret_vertical("abc\ndef", 4, 3, false), 0);
 }
 
 #[test]
@@ -2055,6 +2102,28 @@ mod search_screen_render {
     fn land(app: &mut App, results: SearchResults) {
         let completion = SearchCompletion { generation: 1, outcome: SearchOutcome::Ready(results) };
         land_search_completion(app, completion, 1);
+    }
+
+    #[test]
+    fn the_band_anchors_the_terminal_cursor_at_its_caret() {
+        let repo = Repo::init();
+        repo.write("src/registry.rs", "fn resolve() {}\n");
+        repo.commit_all("c");
+        let mut app = open_on_all_files(&repo);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|f| ui::render(f, &app)).unwrap();
+        let empty = terminal.backend().cursor_position();
+
+        key(&mut app, KeyCode::Char('日'));
+        terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+        let after = terminal.backend().cursor_position();
+        assert_eq!(
+            (after.x, after.y),
+            (empty.x + 2, empty.y),
+            "the cursor advances one wide character"
+        );
     }
 
     #[test]
