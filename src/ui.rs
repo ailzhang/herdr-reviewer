@@ -1612,6 +1612,13 @@ mod tests {
     }
 
     #[test]
+    fn an_over_wide_glyph_clamps_to_the_last_cell() {
+        // A wide glyph hard-broken past a one-cell box has no next row to sit on, so the
+        // caret after it clamps to the last cell instead of leaving the box.
+        assert_eq!(caret_cell("日", 1, 1), (0, 0));
+    }
+
+    #[test]
     fn only_input_ending_on_a_full_row_grows_a_continuation_row() {
         assert_eq!(box_rows("abc", 3).len(), 2);
         assert_eq!(box_rows("ab", 3).len(), 1);
