@@ -4,7 +4,7 @@
 mod common;
 
 use common::{Repo, app_on, enter_tab};
-use herdr_reviewr::app::{App, Focus, Tab};
+use herdr_reviewr::app::{App, BaseChoice, BasePicker, Focus, Mode, Tab};
 use herdr_reviewr::config::NavigatorPosition;
 use herdr_reviewr::herdr::AgentChoice;
 use herdr_reviewr::keymap::Keymap;
@@ -137,6 +137,37 @@ fn backspacing_a_wide_character_leaves_the_terminal_cursor_unpainted() {
     let cell = terminal.backend().buffer().cell(cursor).unwrap();
     assert_eq!(cell.bg, ratatui::style::Color::Reset);
     assert_eq!(cell.symbol(), " ");
+}
+
+#[test]
+fn the_base_picker_anchors_the_terminal_cursor_at_its_caret() {
+    let mut app = edited_app();
+    app.base_picker = Some(BasePicker {
+        rows: vec![BaseChoice { name: "main".to_string(), starred: false, is_default: true }],
+        cursor: 0,
+        query: String::new(),
+        caret: 0,
+    });
+    app.mode = Mode::BasePick;
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+    let empty = terminal.backend().cursor_position();
+
+    app.input_push('日');
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+    let after = terminal.backend().cursor_position();
+    assert_eq!(
+        (after.x, after.y),
+        (empty.x + 2, empty.y),
+        "the cursor advances one wide character"
+    );
+    let cell = terminal.backend().buffer().cell(after).unwrap();
+    assert_eq!(
+        cell.bg,
+        ratatui::style::Color::Reset,
+        "end of input leaves the cursor cell unpainted"
+    );
 }
 
 #[test]

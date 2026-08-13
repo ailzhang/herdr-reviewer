@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-08-08
+Last edited: 2026-08-13
 ---
 
 # Input
@@ -215,7 +215,7 @@ A plain-text field that edits at the caret, not only at the end. The search inpu
 - A paste arrives whole via bracketed paste. A multi-line paste keeps its newlines. `\r\n` and `\r` normalize to `\n`.
 - A paste outside the comment editor and the search input is ignored. It never starts or mutates a comment.
 - Movement, insertion, and deletion are character-wise. Multi-byte and wide characters count as whole characters.
-- The terminal cursor follows the painted comment caret in display cells, anchoring an IME candidate
+- The terminal cursor follows every field's caret in display cells, anchoring an IME candidate
   window after wide characters.
 - The painted block caret covers a character under the insertion point. At the end of input, the
   terminal cursor alone marks the insertion point.

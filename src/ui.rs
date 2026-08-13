@@ -417,12 +417,14 @@ fn caret_rowcol(rows: &[(usize, String)], caret: usize) -> (usize, usize) {
     (row, (caret - start).min(text.chars().count()))
 }
 
-/// Map the comment caret to its wrapped row and terminal-cell column.
+/// Map the comment caret to its wrapped row and terminal-cell column. The column stays inside
+/// the content width: a caret at the end of an exactly-full row clamps to the last content
+/// cell, never the box border.
 fn composer_caret_cell_position(input: &str, caret: usize, content_w: usize) -> (usize, usize) {
     let rows = box_rows(input, content_w);
     let (row, char_col) = caret_rowcol(&rows, caret);
     let prefix: String = rows[row].1.chars().take(char_col).collect();
-    (row, prefix.width())
+    (row, prefix.width().min(content_w.saturating_sub(1)))
 }
 
 /// The visible tail of a single-line input and its caret in character and display-cell columns.
@@ -452,6 +454,26 @@ fn single_line_caret_view(input: &str, caret: usize, width: usize) -> (String, u
         end += 1;
     }
     (chars[start..end].iter().collect(), caret - start, caret_cell_col)
+}
+
+/// A single-line input's spans and its caret's display-cell column, relative to the input's
+/// first cell. The text scrolls to keep the caret inside `width` cells, the caret block covers
+/// the character at the caret, and an empty input shows one blank caret cell then the dim
+/// placeholder. The caller adds its prefix width to the column and anchors the terminal cursor
+/// there, so an IME candidate window follows the insertion point (`specs/input.md`).
+fn input_line(
+    text: &str,
+    caret: usize,
+    width: usize,
+    placeholder: &str,
+    p: &Palette,
+) -> (Vec<Span<'static>>, usize) {
+    if text.is_empty() {
+        let dim = Style::default().fg(p.overlay0);
+        return (vec![Span::raw(" "), Span::styled(placeholder.to_string(), dim)], 0);
+    }
+    let (visible, caret_char_col, caret_cell_col) = single_line_caret_view(text, caret, width);
+    (row_with_caret(&visible, caret_char_col, p).spans, caret_cell_col)
 }
 
 /// The new caret char index after moving up (`down == false`) or down one wrapped row, keeping
@@ -1467,19 +1489,13 @@ fn render_find_band(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
     let count_w = count.width();
     let label = "find ";
+    // The query slice is bounded to `query_w` cells, so a long tail never pushes the count off
+    // the right edge.
     let query_w = width.saturating_sub(label.width() + count_w + 1).max(1);
-    let (visible, caret_char_col, caret_cell_col) =
-        single_line_caret_view(&f.query, f.caret, query_w);
+    let (query_spans, caret_cell_col) = input_line(&f.query, f.caret, query_w, "find in file…", p);
 
     let mut spans = vec![Span::styled(label, Style::default().fg(p.subtext0))];
-    if f.query.is_empty() {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled("find in file…", dim));
-    } else {
-        // Scroll the query so the caret stays visible on a query longer than the band, and bound
-        // the slice to `query_w` cells so a long tail never pushes the count off the right edge.
-        spans.extend(row_with_caret(&visible, caret_char_col, p).spans);
-    }
+    spans.extend(query_spans);
 
     let mut line = Line::from(spans);
     if let Some(pad) = width.checked_sub(line.width() + count_w).filter(|pad| *pad > 0) {
@@ -1537,6 +1553,12 @@ mod tests {
     fn comment_caret_follows_the_existing_wrap_rows() {
         // `a日` fills three cells, so `本b` starts the next row at cell zero.
         assert_eq!(composer_caret_cell_position("a日本b", 3, 3), (1, 2));
+    }
+
+    #[test]
+    fn comment_caret_clamps_inside_an_exactly_full_row() {
+        assert_eq!(composer_caret_cell_position("abc", 3, 3), (0, 2));
+        assert_eq!(composer_caret_cell_position("日本", 2, 4), (0, 3));
     }
 
     #[test]
@@ -2165,20 +2187,17 @@ fn render_base_picker(frame: &mut Frame, app: &App, area: Rect) {
     // The filter line: the query with the comment editor's block caret, or a dim invitation
     // while it is empty. The single line cannot wrap, so it scrolls horizontally to keep the
     // caret in view — what was just typed stays visible (`specs/input.md` Base picker).
-    let mut filter = if bp.query.is_empty() {
-        let mut line = row_with_caret("", 0, p);
-        line.spans.push(Span::styled(" type to filter…", Style::default().fg(p.overlay0)));
-        line
-    } else {
-        let chars: Vec<char> = bp.query.chars().collect();
-        let caret_col = bp.caret.min(chars.len());
-        let avail = (inner.width as usize).saturating_sub(2);
-        let start = caret_col.saturating_sub(avail.saturating_sub(1));
-        let visible: String = chars[start.min(chars.len())..].iter().collect();
-        row_with_caret(&visible, caret_col - start, p)
-    };
+    let avail = (inner.width as usize).saturating_sub(2); // after the leading space
+    let (filter_spans, caret_cell_col) =
+        input_line(&bp.query, bp.caret, avail, "type to filter…", p);
+    let mut filter = Line::from(filter_spans);
     filter.spans.insert(0, Span::styled(" ", text_style(p)));
     frame.render_widget(Paragraph::new(filter), Rect { height: 1, ..inner });
+    // The terminal cursor anchors IME candidate windows (`specs/input.md`).
+    let cursor_x = inner.x.saturating_add(1).saturating_add(caret_cell_col as u16);
+    if cursor_x < inner.right() {
+        frame.set_cursor_position(Position::new(cursor_x, inner.y));
+    }
 
     let list_area = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
     let filtered = bp.filtered();
@@ -2368,19 +2387,10 @@ fn render_search(frame: &mut Frame, app: &App, body: Rect) {
         Span::styled(code_chip, if files_mode { inactive } else { active }),
     ]);
     let query_w = l.band.width.saturating_sub(chips_w + 1);
-    let (mut input, caret_cell_col) = if s.query.is_empty() {
-        // An empty query shows a dim placeholder a space past the caret (specs/search.md).
-        let mut line = row_with_caret("", 0, p);
-        line.spans.push(Span::styled(" Search files and code…", dim));
-        (line, 0)
-    } else {
-        // The single-line query cannot wrap, so scroll it horizontally to keep the caret
-        // in view — a longer query otherwise clips the caret off the right edge.
-        let avail = (query_w as usize).saturating_sub(2); // after the "> " prompt
-        let (visible, caret_char_col, caret_cell_col) =
-            single_line_caret_view(&s.query, s.caret, avail);
-        (row_with_caret(&visible, caret_char_col, p), caret_cell_col)
-    };
+    let avail = (query_w as usize).saturating_sub(2); // after the "> " prompt
+    let (query_spans, caret_cell_col) =
+        input_line(&s.query, s.caret, avail, "Search files and code…", p);
+    let mut input = Line::from(query_spans);
     input.spans.insert(0, Span::styled("> ", Style::default().fg(p.peach)));
     let input_area = Rect::new(l.band.x, l.band.y, query_w, l.band.height);
     frame.render_widget(Paragraph::new(input), input_area);
