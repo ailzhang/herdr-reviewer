@@ -183,10 +183,15 @@ fn a_height_capped_composer_scrolls_to_keep_the_caret_visible() {
     let cursor = terminal.backend().cursor_position();
     assert_ne!((cursor.x, cursor.y), (0, 0), "the cursor is placed");
     let buffer = terminal.backend().buffer();
-    let before = buffer.cell((cursor.x - 1, cursor.y)).unwrap();
-    assert_eq!(before.symbol(), "x", "the cursor sits right after the typed text");
     let under = buffer.cell(cursor).unwrap();
     assert_eq!(under.symbol(), " ", "end of input leaves the cursor cell blank");
+    // The last typed character sits one cell left of the cursor, or ends the row above
+    // when the caret wrapped to a fresh row.
+    let before = buffer.cell((cursor.x - 1, cursor.y)).unwrap();
+    let wrapped = (0..buffer.area.width)
+        .filter_map(|x| buffer.cell((x, cursor.y - 1)))
+        .any(|cell| cell.symbol() == "x");
+    assert!(before.symbol() == "x" || wrapped, "the cursor sits right after the typed text");
 }
 
 #[test]
