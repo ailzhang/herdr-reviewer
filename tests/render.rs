@@ -1486,11 +1486,16 @@ fn pr_bodies_render_as_markdown_and_the_description_row_pins_first() {
     r.commit_all("init");
     let mut app = app_on(&r);
     app.set_tab(Tab::Pr).unwrap();
+    let place = herdr_reviewr::forge::FindingPlace::from_anchor(
+        "x.rs:1",
+        Some(herdr_reviewr::model::Side::New),
+    );
     let finding = Comment {
         kind: CommentKind::Finding,
         author: "codex".into(),
         author_is_bot: true,
-        anchor: "x.rs:1".into(),
+        anchor: place.anchor(),
+        place: Some(place),
         body: "Avoid **panics** in `parse`.".into(),
         snippet: Some("-    old\n+    new".into()),
         ..common::comment()
@@ -1516,12 +1521,93 @@ fn pr_bodies_render_as_markdown_and_the_description_row_pins_first() {
     let comments_at = nav.find("comments ·").expect("comments header in the nav");
     assert!(desc_at < checks_at && checks_at < comments_at, "nav order:\n{nav}");
 
-    // The finding: the snippet stays plain +/− lines, the body renders as markdown.
+    // The finding: the snippet paints as Diff-view rows, the body renders as markdown.
     app.pr_move(1);
     let out = render(&app);
-    assert!(out.contains("+    new"), "the diff hunk stays plain:\n{out}");
+    assert!(out.contains("old"), "the deletion row paints:\n{out}");
+    assert!(out.contains("new"), "the insertion row paints:\n{out}");
+    assert!(!out.contains("+    new"), "the hunk is not raw +/- text:\n{out}");
     assert!(out.contains("Avoid panics in parse."), "the body renders styled:\n{out}");
     assert!(!out.contains("**panics**"), "markers are consumed:\n{out}");
+}
+
+#[test]
+fn a_finding_range_paints_as_diff_rows() {
+    use herdr_reviewr::forge::{Comment, CommentKind, PrSnapshot, PrView};
+    let r = Repo::init();
+    r.write("x.rs", "y\n");
+    r.commit_all("init");
+    let mut app = app_on(&r);
+    app.set_tab(Tab::Pr).unwrap();
+    let hunk = format!(
+        concat!(
+            "@@ -16,10 +16,10 @@\n",
+            " OUT_ABOVE\n",
+            " a\n",
+            " b\n",
+            " c\n",
+            " ctx\n",
+            "-    let x = foo(a);\n",
+            "+    let x = bar(a); SNIP_HEAD{}SNIP_TAIL\n",
+            " tail\n",
+            " d\n",
+            " e\n",
+            " OUT_BELOW\n",
+        ),
+        "x".repeat(80),
+    );
+    let finding = |anchor: &str, body: &str| {
+        let place = herdr_reviewr::forge::FindingPlace::from_anchor(
+            anchor,
+            Some(herdr_reviewr::model::Side::New),
+        );
+        Comment {
+            kind: CommentKind::Finding,
+            author: "codex".into(),
+            author_is_bot: true,
+            anchor: place.anchor(),
+            place: Some(place),
+            body: body.into(),
+            snippet: Some(hunk.clone()),
+            ..common::comment()
+        }
+    };
+    app.pr = PrView::Pr(Box::new(PrSnapshot {
+        comments: vec![finding("x.rs:21", "keep this"), finding("x.rs:16", "second finding")],
+        ..common::pr_snapshot()
+    }));
+    app.wrap = false;
+    let out = render(&app);
+    // The nav label is `x.rs:21`; the gutter must also paint in the read pane.
+    let read = out
+        .lines()
+        .map(|l| l.chars().take(l.chars().count() * 68 / 100).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        read.lines().any(|l| l.contains("21") && l.contains("foo")),
+        "the gutter 21 sits on the deletion row:\n{read}"
+    );
+    assert!(out.contains("foo"), "the deletion in range paints:\n{out}");
+    assert!(out.contains("bar"), "the insertion in range paints:\n{out}");
+    assert!(out.contains("SNIP_TAIL"), "the snippet wraps even when wrap is off:\n{out}");
+    assert!(out.contains("ctx") && out.contains("tail"), "the three-line margin paints:\n{out}");
+    assert!(!out.contains("OUT_ABOVE"), "context beyond the margin is omitted:\n{out}");
+    assert!(!out.contains("OUT_BELOW"), "following context beyond the margin is omitted:\n{out}");
+    assert!(!out.contains("@@"), "the hunk header does not paint:\n{out}");
+    assert!(
+        out.contains("Comment on line +21"),
+        "an insertion in the range keeps the + sign:\n{out}"
+    );
+    assert!(out.contains("keep this"), "the body follows the range:\n{out}");
+
+    app.pr_move(1);
+    let out = render(&app);
+    assert!(out.contains("Comment on line 16"), "a context range has no sign:\n{out}");
+    assert!(out.contains("OUT_ABOVE"), "the other finding's range paints:\n{out}");
+    assert!(!out.contains("foo"), "the first finding's deletion does not linger:\n{out}");
+    assert!(!out.contains("bar"), "the first finding's insertion does not linger:\n{out}");
+    assert!(out.contains("second finding"), "the selected body follows its range:\n{out}");
 }
 
 #[test]
@@ -2022,6 +2108,10 @@ fn an_anchor_in_a_comment_body_jumps_past_the_snippet_offset() {
             author: "codex".into(),
             author_is_bot: true,
             anchor: "x.rs:1".into(),
+            place: Some(herdr_reviewr::forge::FindingPlace::from_anchor(
+                "x.rs:1",
+                Some(herdr_reviewr::model::Side::New),
+            )),
             body,
             snippet: Some("-    old\n+    new".into()),
             ..common::comment()
@@ -2029,14 +2119,14 @@ fn an_anchor_in_a_comment_body_jumps_past_the_snippet_offset() {
         ..common::pr_snapshot()
     }));
     let out = render(&app);
-    assert!(out.contains("+    new"), "the snippet paints above the body:\n{out}");
+    assert!(out.contains("new"), "the snippet paints above the body:\n{out}");
 
     // The anchor stores its content line snippet-offset included, so the jump lands on
     // the heading, scrolling the snippet and the body's top out of view.
     app.open_link("#target");
     let out = render(&app);
     assert!(out.contains("Target"), "the heading is on screen:\n{out}");
-    assert!(!out.contains("+    new"), "the snippet scrolled away:\n{out}");
+    assert!(!out.contains("new"), "the snippet scrolled away:\n{out}");
     assert!(!out.contains("jump go"), "the body's top scrolled away:\n{out}");
 }
 

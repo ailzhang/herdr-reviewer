@@ -285,6 +285,15 @@ impl FileDiff {
     }
 }
 
+pub(crate) fn set_row_spans(row: &mut Row, next: Vec<Span>) {
+    match row {
+        Row::Context { spans, .. } | Row::Deletion { spans, .. } | Row::Insertion { spans, .. } => {
+            *spans = next;
+        }
+        Row::Fold { .. } => {}
+    }
+}
+
 /// Fill word-level `emphasis` on the related deletion/insertion lines of each change block
 /// (a run of deletions immediately followed by a run of insertions). Rather than pairing by
 /// position — which mis-pairs unrelated lines when a block rewrites several lines at once —
@@ -292,7 +301,7 @@ impl FileDiff {
 /// insertion similar enough to be the same line edited (see [`pair_homologs`], after
 /// git-delta's `infer_edits`). Lines with no homolog stay unemphasized, carrying only their
 /// red/green; emphasis then points at a real edit instead of flooding a wholesale rewrite.
-fn compute_emphasis(rows: &mut [Row]) {
+pub(crate) fn compute_emphasis(rows: &mut [Row]) {
     let mut i = 0;
     while i < rows.len() {
         let del_start = i;
@@ -472,7 +481,7 @@ fn collapse_context(rows: &[Row]) -> Vec<Row> {
 
 /// The extension used to pick a syntax, e.g. `rs` for `src/app.rs`; `None` when the
 /// file name has no extension.
-fn language_of(path: &str) -> Option<String> {
+pub(crate) fn language_of(path: &str) -> Option<String> {
     Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_string)
 }
 

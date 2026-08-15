@@ -145,6 +145,7 @@ pub fn comment() -> herdr_reviewr::forge::Comment {
         author: "ann".into(),
         author_is_bot: false,
         anchor: "comment".into(),
+        place: None,
         body: "b".into(),
         snippet: None,
         created_at: "2026-06-27T10:00:00Z".into(),

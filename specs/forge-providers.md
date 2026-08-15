@@ -28,6 +28,7 @@ Each provider owns its full read. An optional surface that cannot be read adds n
 - `UNKNOWN` means GitHub still computes. Then `merge` is `clean`, unless `mergeStateStatus` is `DIRTY`.
 - Checks are check runs and commit statuses. There is one list.
 - A review is a `review` row. A review thread is a `finding` row. The row has the resolved flag and the outdated flag from GitHub. A conversation comment is a `comment` row.
+- The range of a thread is `startLine`..`line`. If the new-side lines are not there, the range is `originalStartLine`..`originalLine`. A `LEFT` thread uses the original pair even when GitHub also filled the new-side fields. The thread's `diffSide` is the finding's side.
 - The query finds PRs by head branch name in the target repository. Open PRs come on their own page beside the finished page. A long finished history cannot hide an open PR.
 - On a fork, an upstream result counts only when its head is in the fork. A merged PR or a closed PR whose fork was deleted still counts if the containment check confirms it.
 
@@ -40,6 +41,7 @@ Each provider owns its full read. An optional surface that cannot be read adds n
 - Checks are the jobs of the head pipeline. There is one row per job. A job that is allowed to fail counts as skipped. That job is never failing.
 - If a jobs page is after the cap, reviewr adds one `pipeline` row with the verdict of the pipeline. If there is no pipeline, the list is empty. If the user cannot read the pipeline, the list is empty.
 - An MR note is a `comment` row. A diff discussion is a `finding` row. The row has the resolved flag. There is no snippet. GitLab sends no code context. An approval is a `review` row.
+- The range of a diff discussion is its `line_range` when that field is there. If it is not there, the range is the one `new_line` or the one `old_line`.
 - If the approvals surface cannot be read, reviewr adds no `review` rows.
 - A service account counts as a bot. The names are `project_…_bot…`, `group_…_bot…`, and names that end with `[bot]` or `-bot`.
 - After the GitLab count limit of about 10,000 rows, reviewr serves the oldest page. The list is marked truncated.
@@ -50,11 +52,11 @@ Each provider owns its full read. An optional surface that cannot be read adds n
 
 - Identity is `organization/project/repository`.
 
-| accepted URL form                                                                 | note                            |
-| --------------------------------------------------------------------------------- | ------------------------------- |
-| `dev.azure.com/{organization}/{project}/_git/{repository}`                        | https                           |
-| `ssh.dev.azure.com:v3/{organization}/{project}/{repository}`                      | ssh                             |
-| `{organization}.visualstudio.com` and `vs-ssh.visualstudio.com:v3`                | the old forms of the same hosts |
+| accepted URL form                                                                 | note                                              |
+| --------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `dev.azure.com/{organization}/{project}/_git/{repository}`                        | https                                             |
+| `ssh.dev.azure.com:v3/{organization}/{project}/{repository}`                      | ssh                                               |
+| `{organization}.visualstudio.com` and `vs-ssh.visualstudio.com:v3`                | the old forms of the same hosts                   |
 
 - reviewr removes a legacy `DefaultCollection` segment. A repository that has the same name as its project can omit the project segment. Names go in the URL with percent encoding. reviewr addresses the names after decode.
 - The CLI is `az` with the `azure-devops` extension. A missing extension shows its install step. The login remedy is `az login`. For a personal access token the remedy is `az devops login`.
@@ -62,6 +64,7 @@ Each provider owns its full read. An optional surface that cannot be read adds n
 - A conflict is `conflicting`. A rejected required policy is `blocked`. All other cases are `clean`. A merge check that is still in the queue is `clean`.
 - Checks are policy evaluations and commit statuses. There is one list.
 - A PR-level thread is a `comment` row. A file-position thread is a `finding` row. The row has the resolved status of the thread. There is no snippet. A reviewer vote is a `review` row.
+- The range of a file-position thread is `rightFileStart`..`rightFileEnd`. If the right-file lines are not there, the range is the left-file pair.
 - An Azure service identity or build-service identity counts as a bot. The shared name suffixes also count as bots.
 - The query finds PRs by `sourceRefName`. The query uses the newest 100 active PRs and the newest 100 completed PRs. The query is in the target repository only.
 - A fork PR into the target is found through `forkSource`. That PR counts only when the pinned `HEAD` contains its source tip.

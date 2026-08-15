@@ -619,6 +619,17 @@ fn reply_count(thread: &Value) -> u32 {
     comments.saturating_sub(1) as u32
 }
 
+fn thread_line_range(context: &Value) -> (Option<u64>, Option<u64>) {
+    let right_s = context["rightFileStart"]["line"].as_u64();
+    let right_e = context["rightFileEnd"]["line"].as_u64();
+    if right_s.is_some() || right_e.is_some() {
+        return (right_s.or(right_e), right_e.or(right_s));
+    }
+    let left_s = context["leftFileStart"]["line"].as_u64();
+    let left_e = context["leftFileEnd"]["line"].as_u64();
+    (left_s.or(left_e), left_e.or(left_s))
+}
+
 /// Merge the threads and reviewer votes into one newest-first comment list: PR-level threads
 /// are `comment` rows, file-position threads are `finding` rows with the thread's resolved
 /// status, and a reviewer vote is a `review` row (`specs/forge-providers.md`). A thread
@@ -630,30 +641,34 @@ fn merge_comments(threads: &[&Value], pr: &Value) -> Vec<Comment> {
         let author = root["author"]["displayName"].as_str().unwrap_or("").to_string();
         let context = &thread["threadContext"];
         // A file-position thread is a finding; anything else is a plain comment.
-        let (kind, anchor, is_resolved) = match context["filePath"].as_str() {
+        let (kind, anchor, place, is_resolved) = match context["filePath"].as_str() {
             Some(path) => {
                 let path = path.trim_start_matches('/');
-                let line = context["rightFileEnd"]["line"]
-                    .as_u64()
-                    .or_else(|| context["rightFileStart"]["line"].as_u64())
-                    .or_else(|| context["leftFileEnd"]["line"].as_u64());
-                let anchor = match line {
-                    Some(line) => format!("{path}:{line}"),
-                    None => path.to_string(),
-                };
+                let (start, end) = thread_line_range(context);
+                let on_new = context["rightFileStart"]["line"].as_u64().is_some()
+                    || context["rightFileEnd"]["line"].as_u64().is_some();
+                let on_old = context["leftFileStart"]["line"].as_u64().is_some()
+                    || context["leftFileEnd"]["line"].as_u64().is_some();
+                let place = crate::forge::FindingPlace::from_lines(
+                    path,
+                    start,
+                    end,
+                    crate::forge::finding_side(on_new, on_old),
+                );
                 let resolved = matches!(
                     thread["status"].as_str(),
                     Some("closed" | "fixed" | "byDesign" | "wontFix")
                 );
-                (CommentKind::Finding, anchor, resolved)
+                (CommentKind::Finding, place.anchor(), Some(place), resolved)
             }
-            None => (CommentKind::Comment, "comment".to_string(), false),
+            None => (CommentKind::Comment, "comment".to_string(), None, false),
         };
         out.push(Comment {
             kind,
             author_is_bot: is_azure_bot(&root["author"]),
             author,
             anchor,
+            place,
             body: root["content"].as_str().unwrap_or("").trim().to_string(),
             snippet: None,
             created_at: root["publishedDate"].as_str().unwrap_or("").to_string(),
@@ -845,7 +860,7 @@ mod tests {
         ]});
         let comments = merge_comments(&rows, &pr);
         let finding = comments.iter().find(|c| c.kind == CommentKind::Finding).unwrap();
-        assert_eq!(finding.anchor, "src/main.rs:14");
+        assert_eq!(finding.anchor, "src/main.rs:12-14");
         assert!(finding.is_resolved);
         assert!(finding.author_is_bot, "a build-service identity is a bot");
         assert!(finding.snippet.is_none(), "a thread carries no code context");

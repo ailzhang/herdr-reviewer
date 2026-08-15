@@ -26,6 +26,7 @@ use crate::forge;
 use crate::herdr::AgentChoice;
 use crate::keymap::Keymap;
 use crate::model::Comment;
+use crate::snippet::{snippet_caption_sign, snippet_row_is_comment};
 use crate::theme::Palette;
 
 pub fn render(frame: &mut Frame, app: &App) {
@@ -1255,7 +1256,12 @@ fn render_row(row: &Row, layout: RowLayout<'_>, state: RowState) -> Vec<Line<'st
         let bg = if cursor { pal.cursor_bg(focused) } else { pal.surface0 };
         return vec![line.style(Style::default().bg(bg).add_modifier(Modifier::BOLD))];
     }
-    let num = row.new_no().or_else(|| row.old_no()).map_or(String::new(), |n| n.to_string());
+    // `0` is an unnumbered PR snippet row (`specs/pr-tab.md`); file diffs are 1-based.
+    let num = row
+        .new_no()
+        .or_else(|| row.old_no())
+        .filter(|&n| n > 0)
+        .map_or(String::new(), |n| n.to_string());
     // A commented line's number takes the peach comment accent; others sit a step brighter
     // than the dim chrome so they stay legible while read.
     let num_color = if commented { pal.peach } else { pal.overlay1 };
@@ -3250,6 +3256,54 @@ fn render_overflow_scrollbar(
     );
 }
 
+fn push_finding_quote(
+    lines: &mut Vec<Line<'static>>,
+    app: &App,
+    cm: &crate::forge::Comment,
+    width: usize,
+    p: &Palette,
+) {
+    let Some(place) = cm.place.as_ref() else { return };
+    let Some((start, end)) = place.range else { return };
+    let side = place.side.unwrap_or(crate::model::Side::New);
+    let rows = cm
+        .snippet
+        .as_deref()
+        .map(|hunk| app.snippet_rows(hunk, &place.path, start, end, side))
+        .unwrap_or_default();
+    let sign = snippet_caption_sign(&rows, start, end, side);
+    lines.push(Line::from(Span::styled(
+        forge::finding_range_caption(start, end, sign),
+        Style::default().fg(p.overlay0),
+    )));
+    if !rows.is_empty() {
+        let max_no = rows.iter().filter_map(|r| r.new_no().or_else(|| r.old_no())).max();
+        let gutter_w = gutter_width(max_no.unwrap_or(0) as usize);
+        let layout = RowLayout {
+            gutter_w,
+            width,
+            h_scroll: 0,
+            wrap: true,
+            focused: false,
+            pal: p,
+            find: None,
+        };
+        for row in &rows {
+            let state = RowState {
+                commented: snippet_row_is_comment(row, start, end, side),
+                cursor: false,
+                selected: false,
+            };
+            lines.extend(render_row(row, layout, state));
+        }
+        lines.push(Line::from(Span::styled(
+            "─".repeat(width.max(1)),
+            Style::default().fg(p.overlay0),
+        )));
+    }
+    lines.push(Line::raw(""));
+}
+
 /// The PR read pane: the selected description or comment, or the loading/degraded message.
 fn render_pr_read(frame: &mut Frame, app: &App, area: Rect) {
     let p = app.palette();
@@ -3308,19 +3362,9 @@ fn render_pr_read(frame: &mut Frame, app: &App, area: Rect) {
     // The markdown body's render metadata and its first display row, for hit-testing.
     let mut body_meta: Option<(usize, crate::markdown::Rendered)> = None;
     if let Some(cm) = selected {
-        // The finding's diff hunk stays plain `+`/`−`-colored lines; only the prose body
-        // renders as markdown (specs/pr-tab.md).
-        if let Some(hunk) = &cm.snippet {
-            for raw in hunk.lines() {
-                let color = match raw.bytes().next() {
-                    Some(b'+') => p.green,
-                    Some(b'-') => p.red,
-                    _ => p.overlay0,
-                };
-                lines.push(Line::from(Span::styled(raw.to_string(), Style::default().fg(color))));
-            }
-            lines.push(Line::raw(""));
-        }
+        // The finding's range paints as Diff-view rows; only the prose body is markdown
+        // (specs/pr-tab.md).
+        push_finding_quote(&mut lines, app, cm, width, p);
         let mut rendered = app.markdown_render(&cm.body, width.max(1));
         let offset = lines.len();
         lines.append(&mut rendered.lines);

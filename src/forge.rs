@@ -198,8 +198,10 @@ pub struct Comment {
     pub kind: CommentKind,
     pub author: String,
     pub author_is_bot: bool,
-    /// `path:line` for a finding, the literal `review`/`comment` for the unanchored kinds.
+    /// `path`, `path:line`, or `path:start-end` for a finding, the kind word otherwise.
     pub anchor: String,
+    /// Path, line range, and side for a `finding`. None for a review or comment.
+    pub place: Option<FindingPlace>,
     pub body: String,
     /// The finding's diff hunk as GitHub returns it; `None` for a review or comment.
     pub snippet: Option<String>,
@@ -216,6 +218,69 @@ pub enum CommentKind {
     Review,
     Comment,
     Finding,
+}
+
+/// Where a finding sits: path, inclusive line range, and which file side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindingPlace {
+    pub path: String,
+    pub range: Option<(u32, u32)>,
+    pub side: Option<crate::model::Side>,
+}
+
+impl FindingPlace {
+    pub fn from_lines(
+        path: &str,
+        start: Option<u64>,
+        end: Option<u64>,
+        side: Option<crate::model::Side>,
+    ) -> Self {
+        let range = match (start, end) {
+            (Some(a), Some(b)) => {
+                let (a, b) = (a as u32, b as u32);
+                Some(if a <= b { (a, b) } else { (b, a) })
+            }
+            (Some(n), None) | (None, Some(n)) => Some((n as u32, n as u32)),
+            (None, None) => None,
+        };
+        Self { path: path.to_string(), range, side }
+    }
+
+    /// Test helper: `path`, `path:line`, or `path:start-end`.
+    pub fn from_anchor(anchor: &str, side: Option<crate::model::Side>) -> Self {
+        let Some((path, rest)) = anchor.rsplit_once(':') else {
+            return Self { path: anchor.to_string(), range: None, side };
+        };
+        if let Some((a, b)) = rest.split_once('-')
+            && let (Ok(s), Ok(e)) = (a.parse::<u32>(), b.parse::<u32>())
+        {
+            let (lo, hi) = if s <= e { (s, e) } else { (e, s) };
+            return Self { path: path.to_string(), range: Some((lo, hi)), side };
+        }
+        if let Ok(n) = rest.parse::<u32>() {
+            return Self { path: path.to_string(), range: Some((n, n)), side };
+        }
+        Self { path: anchor.to_string(), range: None, side }
+    }
+
+    pub fn anchor(&self) -> String {
+        finding_anchor(
+            &self.path,
+            self.range.map(|(s, _)| u64::from(s)),
+            self.range.map(|(_, e)| u64::from(e)),
+        )
+    }
+}
+
+/// New/right wins; old/left only when there is no new-side signal.
+pub(crate) fn finding_side(on_new: bool, on_old: bool) -> Option<crate::model::Side> {
+    if on_new {
+        Some(crate::model::Side::New)
+    } else if on_old {
+        Some(crate::model::Side::Old)
+    } else {
+        None
+    }
 }
 
 impl PrSnapshot {
@@ -841,7 +906,8 @@ fn build_detail_query(number: u64) -> String {
          ... on CheckRun{{name status conclusion}} ... on StatusContext{{context state}}}}}}}}}}}}}} \
          reviews(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body submittedAt}}}} \
          comments(last:100){{pageInfo{{hasPreviousPage}} nodes{{author{{login}} body createdAt}}}} \
-         reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{isResolved isOutdated path line \
+         reviewThreads(last:100){{pageInfo{{hasPreviousPage}} nodes{{isResolved isOutdated path \
+         startLine line originalStartLine originalLine diffSide \
          comments(first:1){{totalCount nodes{{author{{login}} body createdAt diffHunk}}}}}}}}}}}}}}"
     )
 }
@@ -1022,15 +1088,26 @@ fn merge_comments(reviews: &Value, issues: &Value, threads: &Value) -> Vec<Comme
         let root = &t["comments"]["nodes"][0];
         let login = root["author"]["login"].as_str().unwrap_or("").to_string();
         let path = t["path"].as_str().unwrap_or("");
-        let anchor = match t["line"].as_u64() {
-            Some(line) => format!("{path}:{line}"),
-            None => path.to_string(),
-        };
+        let diff_side = t["diffSide"].as_str();
+        let (start, end) = thread_range(
+            t["startLine"].as_u64(),
+            t["line"].as_u64(),
+            t["originalStartLine"].as_u64(),
+            t["originalLine"].as_u64(),
+            diff_side,
+        );
+        let place = FindingPlace::from_lines(
+            path,
+            start,
+            end,
+            finding_side(diff_side == Some("RIGHT"), diff_side == Some("LEFT")),
+        );
         out.push(Comment {
             kind: CommentKind::Finding,
             author_is_bot: is_bot(&login),
             author: login,
-            anchor,
+            anchor: place.anchor(),
+            place: Some(place),
             body: root["body"].as_str().unwrap_or("").trim().to_string(),
             snippet: root["diffHunk"].as_str().filter(|h| !h.is_empty()).map(str::to_string),
             created_at: root["createdAt"].as_str().unwrap_or("").to_string(),
@@ -1055,6 +1132,49 @@ fn prose_comment(
     prose_row(kind, login, bot, body, created_at.unwrap_or("").to_string())
 }
 
+pub(crate) fn finding_anchor(path: &str, start: Option<u64>, end: Option<u64>) -> String {
+    match (start, end) {
+        (Some(a), Some(b)) if a != b => {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            format!("{path}:{lo}-{hi}")
+        }
+        (Some(n), _) | (_, Some(n)) => format!("{path}:{n}"),
+        (None, None) => path.to_string(),
+    }
+}
+
+/// Read-pane caption for a finding range (`specs/pr-tab.md`).
+pub(crate) fn finding_range_caption(start: u32, end: u32, sign: Option<char>) -> String {
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    let n = |n: u32| match sign {
+        Some(sign) => format!("{sign}{n}"),
+        None => n.to_string(),
+    };
+    if start == end {
+        format!("Comment on line {}", n(start))
+    } else {
+        format!("Comment on lines {} to {}", n(start), n(end))
+    }
+}
+
+/// New-side start/end, else the original-side pair. A LEFT thread prefers the original pair
+/// even when GitHub also filled `startLine`/`line`.
+fn thread_range(
+    start_line: Option<u64>,
+    line: Option<u64>,
+    original_start: Option<u64>,
+    original_line: Option<u64>,
+    diff_side: Option<&str>,
+) -> (Option<u64>, Option<u64>) {
+    if diff_side == Some("LEFT") && (original_start.is_some() || original_line.is_some()) {
+        return (original_start.or(original_line), original_line.or(original_start));
+    }
+    if start_line.is_some() || line.is_some() {
+        return (start_line.or(line), line.or(start_line));
+    }
+    (original_start.or(original_line), original_line.or(original_start))
+}
+
 /// One PR-level prose row with the defaults every non-`finding` comment shares. Both
 /// providers build their `review`/`comment` rows through this one shape.
 pub(crate) fn prose_row(
@@ -1073,6 +1193,7 @@ pub(crate) fn prose_row(
         author_is_bot,
         author,
         anchor: anchor.to_string(),
+        place: None,
         body,
         snippet: None,
         created_at,
@@ -1530,6 +1651,47 @@ mod tests {
         let cs = merge_comments(&reviews, &serde_json::json!([]), &threads);
         assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Finding).count(), 2);
         assert_eq!(cs.iter().filter(|c| c.kind == CommentKind::Review).count(), 1); // prose collapsed
+        assert_eq!(cs.iter().find(|c| c.body == "finding one").unwrap().anchor, "a.py:10");
+    }
+
+    #[test]
+    fn a_finding_anchor_is_the_thread_range() {
+        assert_eq!(finding_anchor("a.rs", Some(10), Some(12)), "a.rs:10-12");
+        assert_eq!(finding_anchor("a.rs", Some(10), Some(10)), "a.rs:10");
+        assert_eq!(finding_anchor("a.rs", None, Some(7)), "a.rs:7");
+        assert_eq!(finding_anchor("a.rs", None, None), "a.rs");
+        let p = FindingPlace::from_anchor("a.rs:10-12", Some(crate::model::Side::New));
+        assert_eq!(p.path, "a.rs");
+        assert_eq!(p.range, Some((10, 12)));
+        let p = FindingPlace::from_anchor("a.rs:10", Some(crate::model::Side::New));
+        assert_eq!(p.range, Some((10, 10)));
+        let p = FindingPlace::from_anchor("a.rs", None);
+        assert_eq!(p.range, None);
+        assert_eq!(finding_range_caption(10, 12, Some('+')), "Comment on lines +10 to +12");
+        assert_eq!(finding_range_caption(22, 23, Some('-')), "Comment on lines -22 to -23");
+        assert_eq!(finding_range_caption(7, 7, None), "Comment on line 7");
+
+        let threads = serde_json::json!([
+            {"isResolved": false, "isOutdated": false, "path": "a.py",
+             "startLine": 10, "line": 12, "originalStartLine": 9, "originalLine": 11,
+             "diffSide": "RIGHT",
+             "comments": {"totalCount": 1, "nodes": [{"author": {"login": "ann"}, "body": "r", "createdAt": "2026-06-27T10:00:00Z"}]}},
+            {"isResolved": false, "isOutdated": true, "path": "gone.py",
+             "startLine": null, "line": null, "originalStartLine": 3, "originalLine": 5,
+             "diffSide": "LEFT",
+             "comments": {"totalCount": 1, "nodes": [{"author": {"login": "ann"}, "body": "old", "createdAt": "2026-06-27T11:00:00Z"}]}}
+        ]);
+        let cs = merge_comments(&serde_json::json!([]), &serde_json::json!([]), &threads);
+        assert_eq!(cs.iter().find(|c| c.body == "r").unwrap().anchor, "a.py:10-12");
+        assert_eq!(
+            cs.iter().find(|c| c.body == "r").unwrap().place.as_ref().unwrap().side,
+            Some(crate::model::Side::New)
+        );
+        assert_eq!(cs.iter().find(|c| c.body == "old").unwrap().anchor, "gone.py:3-5");
+        assert_eq!(
+            cs.iter().find(|c| c.body == "old").unwrap().place.as_ref().unwrap().side,
+            Some(crate::model::Side::Old)
+        );
     }
 
     #[test]
@@ -1541,6 +1703,7 @@ mod tests {
             author: "claude[bot]".to_string(),
             author_is_bot: true,
             anchor: anchor.to_string(),
+            place: None,
             body: body.to_string(),
             snippet: None,
             created_at: created_at.to_string(),

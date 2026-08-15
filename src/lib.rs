@@ -27,6 +27,7 @@ pub mod markdown;
 pub mod model;
 pub mod proc;
 pub mod search;
+pub mod snippet;
 pub mod theme;
 pub mod turn;
 pub mod ui;

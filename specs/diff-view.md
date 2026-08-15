@@ -12,7 +12,7 @@ The structured diff viewer. The viewer shows how a file changed. The model has s
 
 The viewer shows a `FileDiff`. The `FileDiff` is the selected file as a list of rows. The rows are built from the old content and the new content of the file. The rows are not built from parsed `git diff` text. A row is the unit that the pane shows. The cursor moves on a row. One model serves two views.
 
-The Diff view (`Changes`) shows old versus new. That view has change rows and folds. The File view (`All files`) shows the full current file as `context` rows.
+The Diff view (`Changes`) shows old versus new. That view has change rows and folds. The File view (`All files`) shows the full current file as `context` rows. A PR finding snippet (`pr-tab.md`) uses the same content-row show. That snippet is not a FileDiff.
 
 What the reviewer sees (unified view, a renamed TypeScript file):
 
@@ -45,7 +45,7 @@ What the reviewer sees (unified view, a renamed TypeScript file):
 
 ### Row
 
-You can select content rows for comments. You cannot select a `fold`.
+You can select content rows for comments in the file tabs. You cannot select a `fold`. You cannot select the rows of a PR snippet (`pr-tab.md`).
 
 | kind        | has                           | meaning                                          |
 | ----------- | ----------------------------- | ------------------------------------------------ |
@@ -65,6 +65,7 @@ You can select content rows for comments. You cannot select a `fold`.
 - The full file has highlight. Each hunk does not have its own highlight. A string or a comment that spans many lines has the correct color inside a hunk.
 - The language comes from the path. A path that is not known shows as plain.
 - The diff and the highlight are stored by content. A poll that finds the file unchanged does not compute again.
+- A stored PR finding snippet (`pr-tab.md`) becomes content rows from its unified-diff lines. The rows have highlight from the path. The rows have word emphasis from the same pairing. The snippet keeps a three-line margin around the comment range. The snippet is not a FileDiff. The snippet has no folds. The snippet has no highlight of the full file.
 
 ### Word emphasis
 
@@ -128,7 +129,7 @@ Return to source is different per view.
 ### Wrapping and the gutter
 
 - The diff is one unified column. Removed lines come first. Then added lines come. The column uses the full width. There is one gutter.
-- Long lines wrap by default. The wrap is at word boundaries. A word that is wider than the column breaks. A toggle switches to horizontal scroll (`←` / `→`). The gutter stays.
+- Long lines wrap by default. The wrap is at word boundaries. A word that is wider than the column breaks. A toggle switches to horizontal scroll (`←` / `→`). The gutter stays. A PR snippet always wraps (`pr-tab.md`). The wrap toggle does not apply to that snippet.
 - A wrapped continuation row has a blank gutter. That row drops the leading space of the break.
 - A commented line shows its line number in the comment color. The change bar keeps its own color.
 - Tabs show as spaces. The default is 4 spaces.
@@ -170,3 +171,4 @@ The viewer only reads. The viewer is computed again on each refresh. The viewer 
 - [theme](./theme.md)
 - [markdown](./markdown.md)
 - [find-in-file](./find-in-file.md)
+- [pr-tab](./pr-tab.md)

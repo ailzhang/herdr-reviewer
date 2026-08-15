@@ -624,6 +624,7 @@ pub struct App {
     /// preview (`specs/markdown.md`). Interior-mutable so the renderer can fill it from
     /// `&App`; cleared with the diff cache on a theme switch.
     markdown_cache: std::cell::RefCell<crate::markdown::RenderCache>,
+    snippet_cache: std::cell::RefCell<crate::snippet::SnippetRowCache>,
     /// The worker-owned turn baseline, mirrored from completions so the sync `last-turn`
     /// paths (the diff's old side, the scope-switch rebuild) read it without a round-trip.
     turn_baseline: Option<String>,
@@ -750,6 +751,7 @@ impl App {
             requested_theme_name: None,
             cache: DiffCache::new(),
             markdown_cache: std::cell::RefCell::new(crate::markdown::RenderCache::default()),
+            snippet_cache: std::cell::RefCell::new(crate::snippet::SnippetRowCache::default()),
             turn_baseline,
             agents_present: None,
         }
@@ -772,6 +774,7 @@ impl App {
             self.highlighter = Highlighter::new(theme.syntax);
             self.cache = DiffCache::new();
             self.markdown_cache.borrow_mut().clear();
+            self.snippet_cache.borrow_mut().clear();
         }
     }
 
@@ -1613,6 +1616,19 @@ impl App {
     #[must_use]
     pub(crate) fn markdown_render(&self, text: &str, width: usize) -> crate::markdown::Rendered {
         self.markdown_cache.borrow_mut().get(text, width, &self.highlighter, &self.palette)
+    }
+
+    /// Finding hunk rows for the PR read pane, through the one-slot memo.
+    #[must_use]
+    pub(crate) fn snippet_rows(
+        &self,
+        hunk: &str,
+        path: &str,
+        start: u32,
+        end: u32,
+        side: crate::model::Side,
+    ) -> Vec<crate::diff::Row> {
+        self.snippet_cache.borrow_mut().get(hunk, path, start, end, side, &self.highlighter)
     }
 
     /// The navigator share remembered for the active side or stacked axis.

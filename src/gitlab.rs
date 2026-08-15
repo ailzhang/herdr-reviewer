@@ -633,25 +633,28 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
         let author = root["author"]["username"].as_str().unwrap_or("").to_string();
         let position = &root["position"];
         // A diff-position thread is a finding; anything else is a plain comment.
-        let (kind, anchor, is_resolved) = if position.is_object() {
+        let (kind, anchor, place, is_resolved) = if position.is_object() {
             let path = position["new_path"]
                 .as_str()
                 .or_else(|| position["old_path"].as_str())
                 .unwrap_or("");
-            let anchor =
-                match position["new_line"].as_u64().or_else(|| position["old_line"].as_u64()) {
-                    Some(line) => format!("{path}:{line}"),
-                    None => path.to_string(),
-                };
-            (CommentKind::Finding, anchor, root["resolved"].as_bool().unwrap_or(false))
+            let ((start, end), side) = gitlab_position(position);
+            let place = crate::forge::FindingPlace::from_lines(path, start, end, side);
+            (
+                CommentKind::Finding,
+                place.anchor(),
+                Some(place),
+                root["resolved"].as_bool().unwrap_or(false),
+            )
         } else {
-            (CommentKind::Comment, "comment".to_string(), false)
+            (CommentKind::Comment, "comment".to_string(), None, false)
         };
         out.push(Comment {
             kind,
             author_is_bot: is_gitlab_bot(&author),
             author,
             anchor,
+            place,
             body: root["body"].as_str().unwrap_or("").trim().to_string(),
             snippet: None,
             created_at: root["created_at"].as_str().unwrap_or("").to_string(),
@@ -678,6 +681,38 @@ fn merge_comments(discussions: &[Value], approvals: &Value) -> Vec<Comment> {
     }
     finish_comments(&mut out);
     out
+}
+
+fn gitlab_position(position: &Value) -> ((Option<u64>, Option<u64>), Option<crate::model::Side>) {
+    let range = &position["line_range"];
+    if range.is_object() {
+        let (start, start_new) = gitlab_end(&range["start"]);
+        let (end, end_new) = gitlab_end(&range["end"]);
+        if start.is_some() || end.is_some() {
+            let mixed = start.is_some() && end.is_some() && start_new != end_new;
+            if mixed {
+                let start =
+                    range["start"]["new_line"].as_u64().or(range["start"]["old_line"].as_u64());
+                let end = range["end"]["new_line"].as_u64().or(range["end"]["old_line"].as_u64());
+                return ((start.or(end), end.or(start)), crate::forge::finding_side(true, false));
+            }
+            let on_new = start_new || end_new;
+            return ((start.or(end), end.or(start)), crate::forge::finding_side(on_new, !on_new));
+        }
+    }
+    let new = position["new_line"].as_u64();
+    let old = position["old_line"].as_u64();
+    let line = new.or(old);
+    ((line, line), crate::forge::finding_side(new.is_some(), old.is_some()))
+}
+
+fn gitlab_end(end: &Value) -> (Option<u64>, bool) {
+    match end["type"].as_str() {
+        Some("old") => (end["old_line"].as_u64().or(end["new_line"].as_u64()), false),
+        Some("new") => (end["new_line"].as_u64().or(end["old_line"].as_u64()), true),
+        _ if end["new_line"].as_u64().is_some() => (end["new_line"].as_u64(), true),
+        _ => (end["old_line"].as_u64(), false),
+    }
 }
 
 /// Whether a GitLab username is a service account: the shared name heuristics, or GitLab's
@@ -925,7 +960,8 @@ mod tests {
                      "author": {"username": "reviewer"},
                      "created_at": "2026-07-22T11:00:00Z",
                      "resolved": true,
-                     "position": {"new_path": "src/a.rs", "new_line": 12}},
+                     "position": {"new_path": "src/a.rs", "new_line": 10,
+                      "line_range": {"start": {"new_line": 10}, "end": {"new_line": 12}}}},
                     {"system": false, "body": "Fixed.",
                      "author": {"username": "author"}, "created_at": "2026-07-22T12:00:00Z"}
                 ]
@@ -935,18 +971,35 @@ mod tests {
                     {"system": false, "body": "General question.",
                      "author": {"username": "someone"}, "created_at": "2026-07-22T09:00:00Z"}
                 ]
+            },
+            {
+                "notes": [
+                    {"system": false, "body": "On the old column.",
+                     "author": {"username": "reviewer"},
+                     "created_at": "2026-07-22T13:00:00Z",
+                     "position": {"old_path": "src/a.rs",
+                      "line_range": {"start": {"type": "old", "old_line": 8, "new_line": 10},
+                                     "end": {"type": "old", "old_line": 9, "new_line": 11}}}}
+                ]
             }
         ]);
         let approvals = json!({"approved_by": [{"user": {"username": "reviewer"}}]});
         let comments = merge_comments(discussions.as_array().unwrap(), &approvals);
-        assert_eq!(comments.len(), 3);
-        assert_eq!(comments[0].kind, CommentKind::Finding);
-        assert_eq!(comments[0].anchor, "src/a.rs:12");
-        assert!(comments[0].is_resolved);
-        assert_eq!(comments[0].reply_count, 1);
-        assert_eq!(comments[1].kind, CommentKind::Comment);
-        assert_eq!(comments[2].kind, CommentKind::Review);
-        assert_eq!(comments[2].author, "reviewer");
+        assert_eq!(comments.len(), 4);
+        let finding = comments.iter().find(|c| c.body == "Looks wrong.").unwrap();
+        assert_eq!(finding.kind, CommentKind::Finding);
+        assert_eq!(finding.anchor, "src/a.rs:10-12");
+        assert_eq!(finding.place.as_ref().unwrap().side, Some(crate::model::Side::New));
+        assert!(finding.is_resolved);
+        assert_eq!(finding.reply_count, 1);
+        let old = comments.iter().find(|c| c.body == "On the old column.").unwrap();
+        assert_eq!(old.anchor, "src/a.rs:8-9");
+        assert_eq!(old.place.as_ref().unwrap().side, Some(crate::model::Side::Old));
+        assert!(comments.iter().any(|c| c.kind == CommentKind::Comment));
+        assert_eq!(
+            comments.iter().find(|c| c.kind == CommentKind::Review).unwrap().author,
+            "reviewer"
+        );
     }
 
     #[test]

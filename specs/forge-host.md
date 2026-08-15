@@ -41,15 +41,16 @@ The snapshot:
 
 A `comments` row:
 
-| field                        | type         | meaning                                                                       |
-| ---------------------------- | ------------ | ----------------------------------------------------------------------------- |
-| `kind`                       | enum         | `review` (a review body), `comment` (conversation), `finding` (inline)        |
-| `author`, `author_is_bot`    | string, bool | the `@login` and whether the author is a bot                                  |
-| `anchor`                     | string       | `path:line` for a `finding`, the kind word in other cases                     |
-| `body`, `snippet`            | string       | the text as the forge returns it, only a `finding` has a snippet              |
-| `created_at`                 | time         | post time, the newest-first sort key                                          |
-| `is_resolved`, `is_outdated` | bool         | thread state for a `finding`, always false in other cases                     |
-| `reply_count`                | int          | replies on a `finding` thread after the root                                  |
+| field                        | type         | meaning                                                                          |
+| ---------------------------- | ------------ | -------------------------------------------------------------------------------- |
+| `kind`                       | enum         | `review` (a review body), `comment` (conversation), `finding` (inline)           |
+| `author`, `author_is_bot`    | string, bool | the `@login` and whether the author is a bot                                     |
+| `anchor`                     | string       | `path:line` or `path:start-end` for a `finding`, the kind word in other cases    |
+| `place`                      | object or none | path, range, and side for a `finding`, none in other cases                     |
+| `body`, `snippet`            | string       | the text as the forge returns it, only a `finding` has a snippet                 |
+| `created_at`                 | time         | post time, the newest-first sort key                                             |
+| `is_resolved`, `is_outdated` | bool         | thread state for a `finding`, always false in other cases                        |
+| `reply_count`                | int          | replies on a `finding` thread after the root                                     |
 
 ## Behavior
 
@@ -114,23 +115,23 @@ More rules:
 
 `merge` shows only blockers.
 
-| condition                      | `merge`       |
-| ------------------------------ | ------------- |
-| a conflict                     | `conflicting` |
-| a rule block or a policy block | `blocked`     |
-| a forge that still computes    | `clean`       |
-| any other case                 | `clean`       |
+| condition                         | `merge`       |
+| --------------------------------- | ------------- |
+| a conflict                        | `conflicting` |
+| a rule block or a policy block    | `blocked`     |
+| a forge that still computes       | `clean`       |
+| any other case                    | `clean`       |
 
 The footer shows `clean` as nothing.
 
 `sync` compares the pinned `HEAD` to the head commit of the PR.
 
-| condition                         | `sync`                   |
-| --------------------------------- | ------------------------ |
-| the two commits are equal         | `in_sync`                |
-| `HEAD` is ahead                   | `unpushed`, with a count |
-| the PR head is ahead              | `behind`                 |
-| the PR head is not on the machine | `unknown`                |
+| condition                         | `sync`                    |
+| --------------------------------- | ------------------------- |
+| the two commits are equal         | `in_sync`                 |
+| `HEAD` is ahead                   | `unpushed`, with a count  |
+| the PR head is ahead              | `behind`                  |
+| the PR head is not on the machine | `unknown`                 |
 
 `unknown` is never a guessed `in_sync`.
 
@@ -144,6 +145,9 @@ The footer shows `clean` as nothing.
 ### Comments
 
 - Reviews, inline threads, and conversation comments join into one list. The newest comment is first.
+- A finding location is a line range on a path. A thread on one line is a range of one line.
+- The `anchor` is `path:start-end` when the two ends differ. The `anchor` is `path:line` when they do not.
+- A thread with no line has an `anchor` that is only the path. That thread has no range.
 - The PR-level posts of a bot collapse to the latest post. All posts of a human stay.
 - `is_resolved` and `is_outdated` come from the forge. reviewr does not compute them again. Resolved threads and outdated threads stay in the list. The list marks them.
 - Each surface reads its newest 100 rows. The surface does not page until the end. One more page sets `truncated`. `pr-tab.md` marks the limited list.
@@ -169,11 +173,11 @@ reviewr only reads. Each failure goes to a clear state. `Changes` and `All files
 
 - A failure on the same input keeps the snapshot that is on the screen and shows its remedy. If there is no snapshot, the remedy fills the tab.
 
-| failure                                 | remedy shown                                         |
-| --------------------------------------- | ---------------------------------------------------- |
-| missing forge CLI or required extension | the install step of that part (`forge-providers.md`) |
-| a fetch with no authentication          | the login command of that CLI (`forge-providers.md`) |
-| any other fetch error                   | the retry error                                      |
+| failure                                   | remedy shown                                         |
+| ----------------------------------------- | ---------------------------------------------------- |
+| missing forge CLI or required extension   | the install step of that part (`forge-providers.md`) |
+| a fetch with no authentication            | the login command of that CLI (`forge-providers.md`) |
+| any other fetch error                     | the retry error                                      |
 
 - A failure before the repository target is found replaces any snapshot with the Git error that you can retry.
 - A Git failure after the same target was found keeps the snapshot. The same error shows.
