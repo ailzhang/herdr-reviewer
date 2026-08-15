@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-08-15
+
+### Added
+- **PR finding quotes.** A GitHub review comment with a stored hunk paints the comment's
+  line range as Diff-view rows: syntax highlight, add/delete tints, line numbers, wrap, and
+  word emphasis. The window is the range plus three stored lines above and below. The
+  navigator shows `path:start-end` when the ends differ, and the read pane captions the
+  range (`Comment on lines +1618 to +1622`). Peach marks the comment subject only.
+
+### Changed
+- **Finding ranges keep the forge side.** GitHub `diffSide`, GitLab `line_range.type`, and
+  Azure left/right fields pick old vs new. A minus caption is an old-side comment; a plus
+  caption is a new-side insertion. GitLab and Azure findings still have no snippet.
+
 ## [0.30.4] — 2026-08-13
 
 ### Changed
