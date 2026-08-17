@@ -1453,18 +1453,22 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
         return Ok(());
     }
 
-    // The bound shortcuts dispatch through the frame's keymap, a bare character or a `ctrl+`/`alt+`
-    // chord (`find` is `ctrl+f`). An unbound chord — `ctrl+u`/`ctrl+d` — resolves to no action and
-    // falls through to the fixed keys below. `↓`/`↑` are fixed synonyms of the `down`/`up` actions,
-    // folded in here so every context pairs them exactly once. The other fixed keys (`tab`, `esc`,
-    // the page keys, `←`/`→`) stay hardcoded per context below (`specs/input.md`).
+    // The bound shortcuts dispatch through the frame's keymap: a character, a chord, or a
+    // named key — the arrows and page keys are default bindings like any other
+    // (`specs/input.md`). A key resolving to no action falls through to the fixed keys below
+    // (`tab`, `esc`), which stay hardcoded per context (`specs/input.md`).
     let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let action = match key.code {
-        Char(c) => keymap.action_for(crate::keymap::Key { ctrl, alt, ch: c }),
-        Down => Some(K::Down),
-        Up => Some(K::Up),
+    let code = match key.code {
+        Char(c) => Some(keymap::KeyCode::Char(c)),
+        Left => Some(keymap::KeyCode::Left),
+        Right => Some(keymap::KeyCode::Right),
+        Up => Some(keymap::KeyCode::Up),
+        Down => Some(keymap::KeyCode::Down),
+        PageUp => Some(keymap::KeyCode::PageUp),
+        PageDown => Some(keymap::KeyCode::PageDown),
         _ => None,
     };
+    let action = code.and_then(|code| keymap.action_for(crate::keymap::Key { ctrl, alt, code }));
 
     // An armed crossing waits for a repeat of the hunk step that armed it. Every other key drops
     // it, and still does its own work (`specs/input.md`). The steps themselves settle their arm in
@@ -1542,10 +1546,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             (Some(K::Keys), _) => app.toggle_keys(),
             (_, Esc) => app.escape(),
             (_, Tab) => app.toggle_focus(),
-            (_, PageDown) if app.focus == Focus::Files => app.pr_scroll_nav(PAGE),
-            (_, PageUp) if app.focus == Focus::Files => app.pr_scroll_nav(-PAGE),
-            (_, PageDown) => app.pr_scroll_read(PAGE),
-            (_, PageUp) => app.pr_scroll_read(-PAGE),
+            (Some(K::PageDown), _) if app.focus == Focus::Files => app.pr_scroll_nav(PAGE),
+            (Some(K::PageUp), _) if app.focus == Focus::Files => app.pr_scroll_nav(-PAGE),
+            (Some(K::PageDown), _) => app.pr_scroll_read(PAGE),
+            (Some(K::PageUp), _) => app.pr_scroll_read(-PAGE),
             _ => {}
         }
         return Ok(());
@@ -1581,6 +1585,22 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::TabPr => app.set_tab(crate::app::Tab::Pr)?,
             K::Down => app.move_cursor(1)?,
             K::Up => app.move_cursor(-1)?,
+            // `expand`/`collapse` act on the collapsible under the cursor — a directory in the
+            // file list, a fold in the diff (expand-only) — and otherwise scroll the diff
+            // sideways (`scroll_h` is a no-op while wrapping, so it only acts when h-scroll is
+            // meaningful) (`specs/input.md` Expand and collapse).
+            K::Expand if app.on_folder() => app.expand_dir(),
+            K::Collapse if app.on_folder() => app.collapse_dir(),
+            K::Expand if app.on_fold() => {
+                let heights = ui::diff_row_heights(app, area);
+                app.expand_fold(&heights, ui::diff_viewport_height(area, app));
+            }
+            K::Expand => app.scroll_h(8),
+            K::Collapse => app.scroll_h(-8),
+            K::PageDown => app.move_cursor(PAGE)?,
+            K::PageUp => app.move_cursor(-PAGE)?,
+            K::HalfDown => app.move_cursor(HALF_PAGE)?,
+            K::HalfUp => app.move_cursor(-HALF_PAGE)?,
             K::NextHunk => app.next_hunk(),
             K::PrevHunk => app.prev_hunk(),
             K::NextFile => app.next_file(),
@@ -1620,22 +1640,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
 
     match key.code {
         Tab => app.toggle_focus(),
-        // Page and half-page keys move the focused pane's cursor (the view follows).
-        Char('u') if ctrl => app.move_cursor(-HALF_PAGE)?,
-        Char('d') if ctrl => app.move_cursor(HALF_PAGE)?,
-        PageDown => app.move_cursor(PAGE)?,
-        PageUp => app.move_cursor(-PAGE)?,
-        // `←`/`→` expand/collapse the collapsible under the cursor — a directory in the file
-        // list, a fold in the diff (expand-only); otherwise they scroll the diff sideways
-        // (`scroll_h` is a no-op while wrapping, so it only acts when h-scroll is meaningful).
-        Right if app.on_folder() => app.expand_dir(),
-        Left if app.on_folder() => app.collapse_dir(),
-        Right if app.on_fold() => {
-            let heights = ui::diff_row_heights(app, area);
-            app.expand_fold(&heights, ui::diff_viewport_height(area, app));
-        }
-        Right => app.scroll_h(8),
-        Left => app.scroll_h(-8),
         // `esc` peels one layer: a live selection, then an armed crossing, then the footer
         // expansion (the `esc` ladder, `specs/input.md`).
         Esc => app.escape(),

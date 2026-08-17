@@ -60,6 +60,7 @@ impl PrView {
     /// newly added retryable failure cannot diverge between those surfaces. `refresh` is the
     /// active `refresh` binding's hint key, so the advertised retry key follows a rebind.
     pub fn retry_remedy(&self, refresh: crate::keymap::Key) -> Option<String> {
+        let refresh = refresh.label();
         match self {
             Self::NoCli(forge) => Some(format!(
                 "{} CLI not found. Install `{}`, then press {refresh}.",

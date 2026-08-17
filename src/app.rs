@@ -352,7 +352,6 @@ pub enum FooterAction {
         forward: bool,
     },
     /// The `move` band's cursor-movement pairs, each rendered as its two keys (`specs/input.md`).
-    /// `MovePage` names the fixed page keys, which are not rebindable.
     MoveLine,
     MoveHunk,
     MoveFile,
