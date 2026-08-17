@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-08-17
+
 ### Added
 - **Every key rebindable.** The arrows and page keys are now ordinary defaults of six new
   actions in `[keybindings]`: `expand`, `collapse`, `page-up`, `page-down`, `half-up`, and
