@@ -27,6 +27,7 @@ pub mod markdown;
 pub mod model;
 pub mod proc;
 pub mod search;
+pub mod selection;
 pub mod snippet;
 pub mod theme;
 pub mod turn;
@@ -198,6 +199,13 @@ fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
 
 /// A transient status message (e.g. "sent 3 comments") fades after this long idle.
 const STATUS_TTL: Duration = Duration::from_secs(4);
+
+/// The exit deadline: stillness this long after the pointer's last event sat on the pane's
+/// edge completes the live gesture — herdr routes mouse by pointer position, so a release
+/// past the pane never arrives. Long enough that a pause while border-scrolling survives,
+/// short enough that an overshoot release's copy beats the paste (specs/text-selection.md).
+/// Its own constant, never the `--poll` cadence: the two measure unrelated things.
+const EXIT_DEADLINE: Duration = Duration::from_secs(1);
 
 /// While the `PR` tab is active, refetch the forge at least this often — a fallback for
 /// forge-side changes with no local signal (a reviewer's comment). Local pushes and forge PR
@@ -683,6 +691,11 @@ fn event_loop(
 ) -> Result<()> {
     let poll = cfg.poll;
     let mut last_poll = Instant::now();
+    // The exit signature's two halves: the last mouse event's arrival, and whether that
+    // event sat on the pane's edge — only both together let the exit deadline complete a
+    // gesture whose release was lost past the pane (specs/text-selection.md).
+    let mut last_mouse = Instant::now();
+    let mut mouse_exited = false;
     let mut last_pr_poll = Instant::now();
     // Local input probes and forge reads run on workers. A completed fetch is applied only after
     // a fresh probe proves its complete input still matches (`specs/forge-host.md`).
@@ -743,11 +756,14 @@ fn event_loop(
                 }
             }
 
+            let size = terminal.size()?;
+            let area = Rect::new(0, 0, size.width, size.height);
             // Every frame starts from one complete validated config snapshot. Input below uses the
             // keymap and geometry this draw paints; later observations continue before another input.
             reconcile_plugin_config(
                 app,
                 cfg,
+                area,
                 &mut config_epoch,
                 &recovery_tx,
                 &mut recovery_inflight,
@@ -795,8 +811,6 @@ fn event_loop(
             // cursor only when a navigation requested it (so the wheel can scroll freely), then
             // bounds the offset every frame. While composing, reserve the inline box's rows and
             // keep revealing so the anchored line stays above the growing box.
-            let size = terminal.size()?;
-            let area = Rect::new(0, 0, size.width, size.height);
             // Rebuild the search preview only once input has settled: with input still queued
             // the build defers, so a pick sweep never waits on it. `build_search_preview` is
             // idempotent — it rebuilds only when the preview no longer matches the pick
@@ -828,11 +842,20 @@ fn event_loop(
 
             // A world completion reconciles into the view only while the view it described is
             // still current; the worker's baseline is authoritative either way (specs/tui.md).
-            if let Ok(completion) = world_rx.try_recv() {
-                if land_world_completion(app, completion, world_generation) {
-                    world_inflight = None;
+            // A navigator drag holds the drain — the input-tagged channel is the queue, no
+            // stored deferral — and the pass that finds the gesture gone drains it to empty,
+            // landing only the live generation (specs/text-selection.md).
+            if !app.gates_world_drain() {
+                let mut landed = false;
+                while let Ok(completion) = world_rx.try_recv() {
+                    if land_world_completion(app, completion, world_generation) {
+                        world_inflight = None;
+                    }
+                    landed = true;
                 }
-                continue;
+                if landed {
+                    continue;
+                }
             }
 
             // A search completion paints only while it matches the query as typed: a stale
@@ -937,7 +960,12 @@ fn event_loop(
             }
 
             // A fetch completion waits for a fresh local-input probe before it may paint.
-            if let Ok(completion) = pr_rx.try_recv() {
+            // A gesture over the `PR` tab holds both PR drains — the coordinator's channels
+            // are the queue, and its input tags discard whatever went stale meanwhile
+            // (specs/text-selection.md).
+            if !app.gates_pr_drain()
+                && let Ok(completion) = pr_rx.try_recv()
+            {
                 let tag = (completion.generation, completion.config_epoch);
                 if pr.active_fetch_tag() != Some(tag) {
                     continue;
@@ -946,6 +974,7 @@ fn event_loop(
                 let config_gate = reconcile_plugin_config(
                     app,
                     cfg,
+                    area,
                     &mut config_epoch,
                     &recovery_tx,
                     &mut recovery_inflight,
@@ -962,7 +991,9 @@ fn event_loop(
 
             // A probe result is the authority for the current input. Input changes blank the old PR;
             // a fetch result paints only when this probe exactly matches its tagged input.
-            if let Ok((epoch, result)) = probe_rx.try_recv() {
+            if !app.gates_pr_drain()
+                && let Ok((epoch, result)) = probe_rx.try_recv()
+            {
                 if pr.active_probe_epoch != Some(epoch) {
                     continue;
                 }
@@ -970,6 +1001,7 @@ fn event_loop(
                 let config_gate = reconcile_plugin_config(
                     app,
                     cfg,
+                    area,
                     &mut config_epoch,
                     &recovery_tx,
                     &mut recovery_inflight,
@@ -1069,6 +1101,10 @@ fn event_loop(
             {
                 timeout = timeout.min(wait);
             }
+            // Wake at the exit deadline, so an abandoned gesture completes on time.
+            if app.gesture_active() && mouse_exited {
+                timeout = timeout.min(EXIT_DEADLINE.saturating_sub(last_mouse.elapsed()));
+            }
             if event::poll(timeout)? {
                 if !painted_frame.still_current(app) {
                     continue;
@@ -1102,12 +1138,15 @@ fn event_loop(
                         );
                     }
                     Event::Mouse(m) => {
+                        last_mouse = Instant::now();
                         // Reuse this frame's `area` and `heights` (computed above for the scroll
                         // settle) so a drag-select doesn't re-measure the whole diff per motion.
-                        if let Err(e) = handle_mouse(app, m, area, &heights, painted_frame.keymap())
+                        if let Err(e) =
+                            handle_mouse(app, m, area, &heights, painted_frame.keymap(), &Clipboard)
                         {
                             app.status = format!("error: {e}");
                         }
+                        mouse_exited = app.gesture_active() && pointer_at_pane_edge(m, area);
                         logln!(
                             "mouse {:?} col={} row={} -> focus={:?} file={} diff_cursor={} scroll={} anchor={:?}",
                             m.kind,
@@ -1137,10 +1176,16 @@ fn event_loop(
             if app.should_quit {
                 break;
             }
+            // Interior stillness is a held button (a release inside would have arrived), so
+            // only the exit signature reaches this completion (specs/text-selection.md).
+            if app.gesture_active() && mouse_exited && last_mouse.elapsed() >= EXIT_DEADLINE {
+                complete_gesture(app, area, &Clipboard);
+            }
             if last_poll.elapsed() >= poll {
                 let config_gate = reconcile_plugin_config(
                     app,
                     cfg,
+                    area,
                     &mut config_epoch,
                     &recovery_tx,
                     &mut recovery_inflight,
@@ -1263,13 +1308,32 @@ fn apply_pr_probe_result(
 fn reconcile_plugin_config(
     app: &mut App,
     cfg: &Config,
+    area: Rect,
     config_epoch: &mut u64,
     recovery_tx: &mpsc::Sender<(u64, PluginConfig, App)>,
     recovery_inflight: &mut bool,
     pr: &mut PrCoordinator,
 ) -> ConfigGate {
     let previous = app.plugin_config().cloned();
-    if !observe_plugin_config(app, cfg, config_epoch, recovery_tx, recovery_inflight) {
+    let observed = config::plugin_config(cfg.plugin_config_dir.as_deref());
+    // A config layout or theme change reflows the frame under a live gesture, and the block
+    // screen replaces its body: both complete the gesture's copy before the new frame
+    // applies, so a world event never silently ends a visible selection
+    // (specs/text-selection.md, "How a gesture ends").
+    if app.gesture_active()
+        && let Some(p) = &previous
+        && config_ends_gesture(p, observed.as_ref().ok())
+    {
+        complete_gesture(app, area, &Clipboard);
+    }
+    if !apply_plugin_config_observation(
+        app,
+        cfg,
+        config_epoch,
+        recovery_tx,
+        recovery_inflight,
+        observed,
+    ) {
         pr.stop();
         return ConfigGate::Blocked;
     }
@@ -1292,26 +1356,22 @@ fn reconcile_plugin_config(
     ConfigGate::Changed { pr_changed }
 }
 
-/// Observe one complete config snapshot. Invalid state blocks work. Recovery loads a fresh app on
-/// a tagged worker, then the event loop revalidates its target and carries authored review state
-/// before swapping it in.
-fn observe_plugin_config(
-    app: &mut App,
-    cfg: &Config,
-    epoch: &mut u64,
-    recovery_tx: &mpsc::Sender<(u64, PluginConfig, App)>,
-    recovery_inflight: &mut bool,
-) -> bool {
-    apply_plugin_config_observation(
-        app,
-        cfg,
-        epoch,
-        recovery_tx,
-        recovery_inflight,
-        config::plugin_config(cfg.plugin_config_dir.as_deref()),
-    )
+/// Whether a fresh config observation ends a live gesture — the end table's config row: a
+/// layout or theme change reflows the frame, and a failed observation (`None`) blocks the
+/// body (specs/text-selection.md).
+#[must_use]
+fn config_ends_gesture(previous: &PluginConfig, observed: Option<&PluginConfig>) -> bool {
+    match observed {
+        Some(c) => {
+            previous.navigator_position() != c.navigator_position() || previous.theme() != c.theme()
+        }
+        None => true,
+    }
 }
 
+/// Apply one complete config observation. Invalid state blocks work. Recovery loads a fresh
+/// app on a tagged worker, then the event loop revalidates its target and carries authored
+/// review state before swapping it in.
 fn apply_plugin_config_observation(
     app: &mut App,
     cfg: &Config,
@@ -1403,6 +1463,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
 
     // A keypress cancels the gesture but keeps consuming its drag events until mouse-up.
     app.cancel_divider_drag();
+    // A reflow input cancels a live text or gutter gesture: nothing copies, and the key
+    // still performs its own action (specs/text-selection.md). The hover `+` stays — it
+    // recomputes each frame from the pointer's last reported cell (specs/diff-view.md).
+    app.cancel_gesture();
+    // Any keypress is the user doing something else: the settled highlight clears
+    // (specs/text-selection.md).
+    app.clear_settled_selection();
 
     if app.composing() {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -1659,6 +1726,418 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
 /// Cancel pointer state whose coordinates belonged to the old terminal geometry.
 fn handle_resize(app: &mut App) {
     app.cancel_divider_drag();
+    // A resize reflows wrapping under an active gesture, so it cancels like a keypress —
+    // and re-wraps the display rows a settled span is anchored to, so that clears too
+    // (specs/text-selection.md).
+    app.cancel_gesture();
+    app.clear_settled_selection();
+    app.hover = None;
+}
+
+/// Route a mouse-down over selectable text: it arms the text gesture, carrying its
+/// multi-click count. The count acts at the release, so a press inside the double-click
+/// window that drags away is still a plain drag selection. Returns whether the event landed
+/// on text (specs/text-selection.md).
+fn handle_text_down(app: &mut App, m: MouseEvent, area: Rect) -> bool {
+    use crate::selection::{Gesture, Point, Surface, TextDrag};
+    let file_tab = app.tab != crate::app::Tab::Pr;
+    let arm = |app: &mut App, surface: Surface, point: Point| {
+        let count = app.note_click(m.column, m.row, point.row);
+        app.gesture =
+            Gesture::Text { drag: TextDrag { surface, anchor: point, extent: point }, count };
+    };
+    if file_tab && let Some(point) = ui::read_point_at(area, app, m.column, m.row) {
+        arm(app, Surface::Read, point);
+        return true;
+    }
+    if file_tab && let Some((comment, point)) = ui::card_point_at(area, app, m.column, m.row) {
+        arm(app, Surface::Card { comment }, point);
+        return true;
+    }
+    if let Some(point) = ui::painted_point(area, app, m.column, m.row, false) {
+        arm(app, Surface::Painted, point);
+        return true;
+    }
+    if file_tab
+        && let Some(i) =
+            ui::hit_file(area, app, m.column, m.row, app.file_rows.len(), app.file_scroll)
+    {
+        arm(app, Surface::Files, Point { row: i, chr: 0 });
+        return true;
+    }
+    if !file_tab && let Some(i) = ui::pr_nav_display_row(area, app, m.column, m.row, false) {
+        arm(app, Surface::PrNav, Point { row: i, chr: 0 });
+        return true;
+    }
+    false
+}
+
+/// Extend the active text drag to the pointer: scroll while the pointer sits past the pane's
+/// content, then move the extent (specs/text-selection.md).
+fn text_drag_extend(app: &mut App, m: MouseEvent, area: Rect) {
+    text_drag_edge_scroll(app, m, area);
+    text_drag_set_extent(app, m, area);
+}
+
+/// The vertical scroll for a drag pointer against `inner`'s rows: past them — on the border
+/// or beyond — scrolls, so the outermost content rows stay selectable without scrolling
+/// (specs/text-selection.md).
+fn edge_delta(row: u16, inner: Rect) -> isize {
+    if row < inner.y {
+        return -1;
+    }
+    isize::from(row >= inner.y + inner.height)
+}
+
+/// Whether the pointer's cell sits on reviewr's own pane edge — the position half of the
+/// exit signature (specs/text-selection.md). herdr delivers mouse events from anywhere
+/// inside the pane, so a release anywhere further in would have arrived; only the outermost
+/// cells can precede a lost release. Public for the gesture tests, like [`handle_mouse`].
+#[must_use]
+pub fn pointer_at_pane_edge(m: MouseEvent, area: Rect) -> bool {
+    m.row <= area.y
+        || m.row >= area.y + area.height.saturating_sub(1)
+        || m.column <= area.x
+        || m.column >= area.x + area.width.saturating_sub(1)
+}
+
+/// Scroll the active drag's pane while the pointer sits past its content rows.
+fn text_drag_edge_scroll(app: &mut App, m: MouseEvent, area: Rect) {
+    use crate::selection::Surface;
+    let Some(drag) = app.text_drag() else { return };
+    match drag.surface {
+        Surface::Read => read_edge_scroll(app, m, area, true),
+        // Card text ignores h-scroll, so a card drag scrolls vertically only —
+        // the gesture never moves a surface it is not on (TS-ONE-SURFACE).
+        Surface::Card { .. } => read_edge_scroll(app, m, area, false),
+        Surface::Files => {
+            let inner = ui::files_inner_rect(area, app);
+            let delta = edge_delta(m.row, inner);
+            if inner.height > 0 && delta != 0 {
+                app.wheel_files(delta);
+            }
+        }
+        Surface::Painted => {
+            // The painted rect, not the pane's inner rect: a `PR` notice sits above the
+            // content, and its rows must scroll a drag, not dead-zone it.
+            let Some(rect) = ui::painted_sel(app, area).map(|s| s.rect) else { return };
+            let delta = edge_delta(m.row, rect);
+            if rect.height > 0 && delta != 0 {
+                if app.tab == crate::app::Tab::Pr {
+                    app.pr_scroll_read(delta);
+                } else {
+                    app.wheel_diff(delta); // the preview's scroll path
+                }
+            }
+        }
+        Surface::PrNav => {
+            let inner = ui::files_inner_rect(area, app);
+            let delta = edge_delta(m.row, inner);
+            if inner.height > 0 && delta != 0 {
+                app.pr_scroll_nav(delta);
+            }
+        }
+    }
+}
+
+/// Move the active drag's extent to the pointer, clamped into its surface (TS-ONE-SURFACE).
+/// The wheel arms call this alone — their scroll already happened, and adding the edge scroll
+/// on top would make wheel speed depend on where the pointer rests.
+fn text_drag_set_extent(app: &mut App, m: MouseEvent, area: Rect) {
+    use crate::selection::{Point, Surface};
+    let Some(drag) = app.text_drag() else { return };
+    let extent = match drag.surface {
+        Surface::Read => ui::read_point_clamped(area, app, m.column, m.row),
+        Surface::Card { comment } => ui::card_point_clamped(area, app, comment, m.column, m.row),
+        Surface::Painted => ui::painted_point(area, app, m.column, m.row, true),
+        Surface::Files => {
+            let inner = ui::files_inner_rect(area, app);
+            if inner.height == 0 || app.file_rows.is_empty() {
+                None
+            } else {
+                let y = m.row.clamp(inner.y, inner.y + inner.height - 1);
+                let i = ((y - inner.y) as usize + app.file_scroll).min(app.file_rows.len() - 1);
+                Some(Point { row: i, chr: 0 })
+            }
+        }
+        Surface::PrNav => ui::pr_nav_display_row(area, app, m.column, m.row, true)
+            .map(|i| Point { row: i, chr: 0 }),
+    };
+    if let Some(p) = extent
+        && let crate::selection::Gesture::Text { drag, .. } = &mut app.gesture
+    {
+        drag.extent = p;
+    }
+}
+
+/// Scroll the read pane while a drag holds the pointer past its content rows (the find band
+/// counts as chrome, not content): rows on the border or beyond, and with `horizontal` set
+/// and wrap off the same for columns.
+fn read_edge_scroll(app: &mut App, m: MouseEvent, area: Rect, horizontal: bool) {
+    let content = ui::read_content_rect(area, app);
+    if content.height == 0 {
+        return;
+    }
+    let delta = edge_delta(m.row, content);
+    if delta != 0 {
+        app.wheel_diff(delta);
+        // The same event's extent update maps against the post-scroll layout.
+        ui::refresh_read_layout(app, area);
+    }
+    if horizontal && !app.wrap {
+        if m.column < content.x {
+            app.h_scroll = app.h_scroll.saturating_sub(2);
+        } else if m.column >= content.x + content.width {
+            // Capped at the widest visible row's last column, so a held border drag cannot
+            // strand the view past all content — and never pulled back, so a keyboard
+            // scroll already past the cap keeps its place (specs/text-selection.md).
+            let cap = ui::widest_visible_row(app, area).saturating_sub(1);
+            if app.h_scroll < cap {
+                app.h_scroll = (app.h_scroll + 2).min(cap);
+            }
+        }
+    }
+}
+
+/// Finish a text drag at its release: a release whose point never left the anchor's
+/// performs the click, or the multi-click's copy — a navigator row, the word under the
+/// cell, or the triple's whole line; anything else copies the selection. `clicks_act` is
+/// false while composing, whose pane clicks are inert — the multi-click copies still fire
+/// there, being selection copies, not pane clicks (specs/text-selection.md).
+fn finish_text_drag(
+    app: &mut App,
+    m: MouseEvent,
+    area: Rect,
+    heights: &[usize],
+    clicks_act: bool,
+    target: &dyn crate::export::ExportTarget,
+) -> Result<()> {
+    use crate::selection::{Gesture, Surface};
+    let Gesture::Text { count, .. } = app.gesture else { return Ok(()) };
+    // One predicate decides the whole release: the extent moves to the release point, and a
+    // release whose point never left the anchor's is the click — which grants the slop the
+    // spec names for free (a navigator row, a wide character's cells, a tab's expansion all
+    // map many cells onto one point). Anything else is a drag with a selection, and copies
+    // (specs/text-selection.md).
+    text_drag_set_extent(app, m, area);
+    let drag = app.text_drag().expect("matched above");
+    if drag.anchor == drag.extent {
+        app.gesture = Gesture::None;
+        match drag.surface {
+            // A navigator double copies the row's path or text, and a triple repeats it;
+            // an empty row falls back to the click, so the gesture is never a silent
+            // no-op (specs/text-selection.md).
+            Surface::Files | Surface::PrNav if count >= 2 => {
+                if !multi_click_copy(app, area, drag, target) && clicks_act {
+                    perform_click(app, m, area, heights, drag)?;
+                }
+            }
+            // A double on a character surface copies the word under the cell; whitespace
+            // and wordless cells act as the click (specs/text-selection.md).
+            Surface::Read | Surface::Painted | Surface::Card { .. } if count == 2 => {
+                if !word_click_copy(app, area, drag, target) && clicks_act {
+                    perform_click(app, m, area, heights, drag)?;
+                }
+            }
+            // A triple on a character surface copies the row's whole source line; an
+            // empty line acts as the click (specs/text-selection.md).
+            Surface::Read | Surface::Painted | Surface::Card { .. } if count >= 3 => {
+                if !line_click_copy(app, area, drag, target) && clicks_act {
+                    perform_click(app, m, area, heights, drag)?;
+                }
+            }
+            _ if clicks_act => perform_click(app, m, area, heights, drag)?,
+            _ => {}
+        }
+        // The release continues the multi-click chain; only a non-release end resets it.
+        app.lift_gesture_freeze();
+    } else {
+        complete_gesture(app, area, target);
+    }
+    Ok(())
+}
+
+/// The navigator double-click copy, fired at the release: a file row's repo-relative path, a
+/// `PR` row's full text. Returns whether anything copied (specs/text-selection.md).
+fn multi_click_copy(
+    app: &mut App,
+    area: Rect,
+    drag: crate::selection::TextDrag,
+    target: &dyn crate::export::ExportTarget,
+) -> bool {
+    use crate::selection::Point;
+    let row = drag.anchor.row;
+    let whole_row = Point { row, chr: usize::MAX };
+    match surface_text(app, area, drag.surface, Point { row, chr: 0 }, whole_row) {
+        // An empty row yields empty text: fall back to the click, so the gesture is never
+        // a silent no-op (specs/text-selection.md).
+        Some(t) if !t.is_empty() => {
+            app.copy_selection_text(target, &t);
+            app.settle_selection(drag, t);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The word double-click copy on the character surfaces, fired at the release: the word
+/// under the cell copies and its highlight settles. Whitespace, punctuation, and cells past
+/// the text return `false`, falling back to the click (specs/text-selection.md).
+fn word_click_copy(
+    app: &mut App,
+    area: Rect,
+    drag: crate::selection::TextDrag,
+    target: &dyn crate::export::ExportTarget,
+) -> bool {
+    use crate::selection::{Point, TextDrag};
+    let row = drag.anchor.row;
+    let whole_row = Point { row, chr: usize::MAX };
+    let Some(line) = surface_text(app, area, drag.surface, Point { row, chr: 0 }, whole_row) else {
+        return false;
+    };
+    let Some((s, e)) = crate::selection::token_at(&line, drag.anchor.chr) else {
+        return false;
+    };
+    let word: String = line.chars().skip(s).take(e - s + 1).collect();
+    app.copy_selection_text(target, &word);
+    app.settle_selection(
+        TextDrag {
+            surface: drag.surface,
+            anchor: Point { row, chr: s },
+            extent: Point { row, chr: e },
+        },
+        word,
+    );
+    true
+}
+
+/// The line triple-click copy on the character surfaces, fired at the release: the row's
+/// whole source line copies and its highlight settles. An empty line returns `false`,
+/// falling back to the click (specs/text-selection.md).
+fn line_click_copy(
+    app: &mut App,
+    area: Rect,
+    drag: crate::selection::TextDrag,
+    target: &dyn crate::export::ExportTarget,
+) -> bool {
+    use crate::selection::{Point, TextDrag};
+    let row = drag.anchor.row;
+    let whole_row = Point { row, chr: usize::MAX };
+    match surface_text(app, area, drag.surface, Point { row, chr: 0 }, whole_row) {
+        Some(line) if !line.is_empty() => {
+            let last = line.chars().count() - 1;
+            app.copy_selection_text(target, &line);
+            app.settle_selection(
+                TextDrag {
+                    surface: drag.surface,
+                    anchor: Point { row, chr: 0 },
+                    extent: Point { row, chr: last },
+                },
+                line,
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
+/// The active drag's clipboard text. Public for the gesture tests, like [`handle_mouse`].
+pub fn drag_text(app: &App, area: Rect) -> Option<String> {
+    let drag = app.text_drag()?;
+    let (a, b) = drag.ordered();
+    surface_text(app, area, drag.surface, a, b)
+}
+
+/// Complete the live gesture — the drag's own off-cell release, the release proofs, the
+/// exit deadline, and a config layout or theme change (specs/text-selection.md, "How a
+/// gesture ends"): a drag with a visible selection copies it to `target`
+/// (`TS-NO-SILENT-LOSS`), a press that never moved and a gutter gesture dissolve with
+/// nothing. Public for the gesture tests.
+pub fn complete_gesture(app: &mut App, area: Rect, target: &dyn crate::export::ExportTarget) {
+    if let Some(drag) = app.text_drag()
+        && drag.anchor != drag.extent
+    {
+        let text = drag_text(app, area).unwrap_or_default();
+        app.copy_selection_text(target, &text);
+        // The copy leaves its span highlighted as feedback (specs/text-selection.md).
+        app.settle_selection(drag, text);
+    }
+    app.cancel_gesture();
+}
+
+/// The copied text for a span on `surface` — the one extractor behind the drag release and
+/// the multi-click copies, so a new surface cannot be extractable in one and forgotten in
+/// the other (specs/text-selection.md Copy).
+fn surface_text(
+    app: &App,
+    area: Rect,
+    surface: crate::selection::Surface,
+    a: crate::selection::Point,
+    b: crate::selection::Point,
+) -> Option<String> {
+    use crate::selection::{Surface, lines_text};
+    match surface {
+        Surface::Read => Some(crate::selection::read_text(&app.visible, a, b)),
+        Surface::Files => {
+            Some(crate::selection::files_text(&app.file_rows, &app.entries, a.row, b.row))
+        }
+        Surface::Painted => Some(lines_text(&ui::painted_texts(app, area), a, b)),
+        Surface::Card { comment } => {
+            let width = ui::read_inner_rect(area, app).width as usize;
+            Some(lines_text(&ui::card_body_lines(app.store.get(comment)?, width), a, b))
+        }
+        Surface::PrNav => {
+            let texts = ui::pr_nav_texts(app);
+            if texts.is_empty() {
+                return None;
+            }
+            let hi = b.row.min(texts.len() - 1);
+            Some(texts.get(a.row..=hi)?.join("\n"))
+        }
+    }
+}
+
+/// The click a same-cell release performs — the pre-selection mouse-down meanings
+/// (specs/input.md).
+fn perform_click(
+    app: &mut App,
+    m: MouseEvent,
+    area: Rect,
+    heights: &[usize],
+    drag: crate::selection::TextDrag,
+) -> Result<()> {
+    use crate::selection::Surface;
+    match drag.surface {
+        // The navigators act on the drag's already-clamped row, not the raw release cell:
+        // the row slop that classified the release as a click also delivers it
+        // (specs/text-selection.md).
+        Surface::Files => app.select_file(drag.extent.row)?,
+        Surface::PrNav => {
+            app.focus = Focus::Files;
+            if let Some(i) = ui::pr_nav_cursor_at(app, drag.extent.row) {
+                app.pr_select(i);
+            }
+        }
+        Surface::Read | Surface::Painted | Surface::Card { .. } => {
+            if let Some(url) = app.painted_link_at(m.column, m.row) {
+                app.focus = Focus::Diff;
+                app.open_link(&url);
+            } else if app.tab == crate::app::Tab::Pr || app.preview_active() {
+                // The painted surfaces have no cursor: a click only focuses the pane.
+                if ui::in_diff_pane(area, app, m.column, m.row) {
+                    app.focus = Focus::Diff;
+                }
+            } else if let Some(i) =
+                ui::hit_diff(area, app, m.column, m.row, heights, app.diff_scroll)
+            {
+                app.focus = Focus::Diff;
+                app.diff_cursor = i;
+                app.select_anchor = None;
+                app.expand_fold(heights, ui::diff_viewport_height(area, app));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Map one mouse event onto `App`. Header hit-testing uses `keymap` — the keymap of the frame
@@ -1670,7 +2149,24 @@ pub fn handle_mouse(
     area: Rect,
     heights: &[usize],
     keymap: &Keymap,
+    target: &dyn crate::export::ExportTarget,
 ) -> Result<()> {
+    app.hover = Some((m.column, m.row));
+    // Pointer motion with no button held, or a fresh mouse-down, proves an active gesture's
+    // release was lost — herdr routes mouse by pointer position, so a release over another
+    // pane never arrives here. The proof completes the old gesture (a visible selection
+    // copies, `TS-NO-SILENT-LOSS`), then the event acts as any event. A motionless held drag
+    // feeds no events at all and stays alive. One guard for every dispatch path below
+    // (specs/text-selection.md).
+    if app.gesture_active() && matches!(m.kind, MouseEventKind::Moved | MouseEventKind::Down(_)) {
+        complete_gesture(app, area, target);
+    }
+    // The next mouse-down is the user doing something else: the settled highlight clears,
+    // after the proof above so a down-completed gesture never leaves one behind either
+    // (specs/text-selection.md).
+    if matches!(m.kind, MouseEventKind::Down(_)) {
+        app.clear_settled_selection();
+    }
     // On the search screen: chips flip, a click picks (a second click on the picked row
     // opens), the wheel moves the pick over results and scrolls the preview, and the
     // divider drags search's own share (specs/search.md Keys). A cancelled divider
@@ -1721,6 +2217,27 @@ pub fn handle_mouse(
     // A modal captures new mouse gestures, but a divider gesture cancelled by the key that
     // opened it still owns its remaining drag and mouse-up events.
     if app.mode.is_modal() {
+        // Text selection stays available while the comment editor is open, selecting from the
+        // frozen view under it; its clicks stay inert like the rest of the modal's pane
+        // (specs/text-selection.md).
+        if app.composing() {
+            match m.kind {
+                MouseEventKind::Down(MouseButton::Left) if !app.divider_drag_captured() => {
+                    if handle_text_down(app, m, area) {
+                        return Ok(());
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) if app.text_drag().is_some() => {
+                    text_drag_extend(app, m, area);
+                    return Ok(());
+                }
+                MouseEventKind::Up(MouseButton::Left) if app.text_drag().is_some() => {
+                    finish_text_drag(app, m, area, heights, false, target)?;
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         match m.kind {
             // A click moves the highlight; a click on the already-highlighted row sends. The
             // highlight is armed when the picker opens, so a first click on the armed row
@@ -1787,29 +2304,45 @@ pub fn handle_mouse(
         _ => {}
     }
 
-    // The read-only PR tab: click a tab or the open button, click a row to read it, and wheel
-    // either pane without moving the selection.
+    // The read-only PR tab: click a tab or the open button, click a row to read it, drag over
+    // text to select and copy it, and wheel either pane without moving the selection.
     if app.tab == crate::app::Tab::Pr {
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(url) = app.painted_link_at(m.column, m.row) {
-                    app.focus = Focus::Diff;
-                    // A link click resolves against the painted frame (specs/markdown.md).
-                    app.open_link(&url);
-                } else if let Some(ui::HeaderHit::Tab(tab)) =
+                if let Some(ui::HeaderHit::Tab(tab)) =
                     ui::hit_header(area, app, keymap, m.column, m.row)
                 {
                     app.set_tab(tab)?;
                 } else if ui::hit_pr_open(area, app, m.column, m.row) {
                     app.pr_open();
+                } else if handle_text_down(app, m, area) {
+                    // A pending click or text drag armed. Every painted row is claimed here,
+                    // so link opens and row selection live in `perform_click`, at the release
+                    // (specs/text-selection.md).
                 } else if ui::in_files_pane(area, app, m.column, m.row) {
+                    // Only blank space below the navigator rows reaches here: the click
+                    // focuses the pane, selecting nothing.
                     app.focus = Focus::Files;
-                    if let Some(i) = ui::pr_nav_hit(area, app, m.column, m.row) {
-                        app.pr_select(i);
-                    }
                 } else if ui::in_diff_pane(area, app, m.column, m.row) {
                     app.focus = Focus::Diff;
                 }
+            }
+            MouseEventKind::Drag(MouseButton::Left) if app.text_drag().is_some() => {
+                text_drag_extend(app, m, area);
+            }
+            MouseEventKind::Up(MouseButton::Left) if app.text_drag().is_some() => {
+                finish_text_drag(app, m, area, heights, true, target)?;
+            }
+            // The wheel during an active drag scrolls the drag's pane and extends the
+            // selection (specs/text-selection.md).
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if app.text_drag().is_some() => {
+                let delta: isize = if m.kind == MouseEventKind::ScrollDown { 3 } else { -3 };
+                if app.text_drag().map(|d| d.surface) == Some(crate::selection::Surface::PrNav) {
+                    app.pr_scroll_nav(delta);
+                } else {
+                    app.pr_scroll_read(delta);
+                }
+                text_drag_set_extent(app, m, area);
             }
             MouseEventKind::ScrollDown if ui::in_files_pane(area, app, m.column, m.row) => {
                 app.pr_scroll_nav(3);
@@ -1833,23 +2366,25 @@ pub fn handle_mouse(
                     // label names the base without offering a choice (`specs/input.md`).
                     ui::HeaderHit::Base => app.open_base_picker(),
                 }
-            } else if let Some(i) =
-                ui::hit_file(area, app, m.column, m.row, app.file_rows.len(), app.file_scroll)
-            {
-                app.select_file(i)?;
-            } else if let Some(url) = app.painted_link_at(m.column, m.row) {
-                // A link click resolves against the painted frame (specs/markdown.md).
-                app.open_link(&url);
+            } else if let Some(row) = ui::gutter_row_at(area, app, m.column, m.row) {
+                // The gutter owns mouse commenting: click a line or drag a range, and the
+                // composer opens on release (specs/input.md).
+                app.start_gutter_drag(row);
+            } else if handle_text_down(app, m, area) {
+                // A pending click or text drag armed. Every painted preview cell is claimed
+                // here, so link opens live in `perform_click`, at the release
+                // (specs/text-selection.md, specs/markdown.md).
             } else if app.preview_active() {
-                // The preview has no cursor or selection: a click in the pane only
-                // focuses it. The pane-rect test, not the source-row hit test — the
-                // rendered preview can be taller than the source has rows.
+                // A preview click only focuses the pane. The pane-rect test, not the
+                // source-row hit test — the rendered preview can be taller than the
+                // source has rows.
                 if ui::in_diff_pane(area, app, m.column, m.row) {
                     app.focus = Focus::Diff;
                 }
             } else if let Some(i) =
                 ui::hit_diff(area, app, m.column, m.row, heights, app.diff_scroll)
             {
+                // Only non-text display lines reach here: a fold or a comment card's line.
                 app.focus = Focus::Diff;
                 app.diff_cursor = i;
                 app.select_anchor = None;
@@ -1857,13 +2392,43 @@ pub fn handle_mouse(
                 app.expand_fold(heights, ui::diff_viewport_height(area, app));
             }
         }
-        MouseEventKind::Drag(MouseButton::Left) => {
-            if app.preview_active() {
-                // No drag-selection in the read-only preview.
-            } else if let Some(i) =
-                ui::hit_diff(area, app, m.column, m.row, heights, app.diff_scroll)
-            {
-                app.drag_select_to(i);
+        MouseEventKind::Drag(MouseButton::Left) if app.gutter_drag() => {
+            // A gutter drag selects rows, so it never scrolls horizontally.
+            read_edge_scroll(app, m, area, false);
+            if let Some(p) = ui::read_point_clamped(area, app, m.column, m.row) {
+                app.drag_select_to(p.row);
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) if app.text_drag().is_some() => {
+            text_drag_extend(app, m, area);
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.gutter_drag() => {
+            app.finish_gutter_drag();
+        }
+        MouseEventKind::Up(MouseButton::Left) if app.text_drag().is_some() => {
+            finish_text_drag(app, m, area, heights, true, target)?;
+        }
+        // The wheel during an active drag scrolls the drag's pane and extends the selection
+        // (specs/text-selection.md).
+        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+            if app.text_drag().is_some() || app.gutter_drag() =>
+        {
+            let delta: isize = if m.kind == MouseEventKind::ScrollDown { 3 } else { -3 };
+            let files =
+                app.text_drag().map(|d| d.surface) == Some(crate::selection::Surface::Files);
+            if files {
+                app.wheel_files(delta);
+            } else {
+                app.wheel_diff(delta);
+                // The same event's extent update maps against the post-scroll layout.
+                ui::refresh_read_layout(app, area);
+            }
+            if app.gutter_drag() {
+                if let Some(p) = ui::read_point_clamped(area, app, m.column, m.row) {
+                    app.drag_select_to(p.row);
+                }
+            } else {
+                text_drag_set_extent(app, m, area);
             }
         }
         // The wheel scrolls the viewport of whichever pane it is over — never the cursor, so
@@ -1965,6 +2530,28 @@ mod refresh_tests {
         handle_resize(&mut app);
 
         assert!(app.divider_drag_cancelled());
+    }
+
+    #[test]
+    fn terminal_resize_cancels_a_live_text_drag_without_copying() {
+        use crate::selection::{Gesture, Point, Surface, TextDrag};
+        let mut app = App::new(std::path::PathBuf::from("."), Scope::Uncommitted, None);
+        let drag = TextDrag {
+            surface: Surface::Read,
+            anchor: Point { row: 0, chr: 0 },
+            extent: Point { row: 0, chr: 4 },
+        };
+        app.gesture = Gesture::Text { drag, count: 1 };
+        app.settle_selection(drag, "alpha".into());
+
+        handle_resize(&mut app);
+
+        // The reflow row of the gesture end table: nothing copies, the input acts — and
+        // the settled span clears, since the resize re-wraps the rows it anchors to
+        // (specs/text-selection.md).
+        assert!(!app.gesture_active(), "a resize ends the gesture");
+        assert_eq!(app.status, "", "a resize-cancelled drag copies nothing");
+        assert!(app.settled_selection().is_none(), "a resize clears the settled highlight");
     }
 
     #[test]
@@ -2654,6 +3241,86 @@ mod refresh_tests {
         ));
         assert_eq!(app.scope, Scope::LastTurn, "a reread never switches the active scope");
         assert_eq!(epoch, 0, "a default_scope change invalidates no running work");
+    }
+
+    #[test]
+    fn only_a_layout_or_theme_change_or_a_block_ends_a_gesture() {
+        use crate::config::plugin_config_in;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "theme = \"gruvbox\"\n").unwrap();
+        let previous = plugin_config_in(dir.path()).unwrap();
+
+        // The same config, and a change that reflows nothing, leave the gesture alone.
+        assert!(!super::config_ends_gesture(&previous, Some(&previous)));
+        std::fs::write(&path, "theme = \"gruvbox\"\ndefault_scope = \"branch\"\n").unwrap();
+        let scoped = plugin_config_in(dir.path()).unwrap();
+        assert!(!super::config_ends_gesture(&previous, Some(&scoped)));
+
+        // A theme or layout change reflows the frame, and a failed observation blocks the
+        // body: each ends the gesture with its copy (specs/text-selection.md).
+        std::fs::write(&path, "theme = \"nord\"\n").unwrap();
+        let themed = plugin_config_in(dir.path()).unwrap();
+        assert!(super::config_ends_gesture(&previous, Some(&themed)));
+        std::fs::write(&path, "theme = \"gruvbox\"\nnavigator_position = \"left\"\n").unwrap();
+        let moved = plugin_config_in(dir.path()).unwrap();
+        assert!(super::config_ends_gesture(&previous, Some(&moved)));
+        assert!(super::config_ends_gesture(&previous, None));
+    }
+
+    #[test]
+    fn a_config_theme_change_ends_a_live_gesture_through_the_observation_boundary() {
+        use crate::selection::{Gesture, Point, Surface, TextDrag};
+        let repo = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        let path = config_dir.path().join("config.toml");
+        std::fs::write(&path, "theme = \"gruvbox\"\n").unwrap();
+        let mut cfg = Config::parse([repo.path().display().to_string()]);
+        cfg.plugin_config_dir = Some(config_dir.path().to_path_buf());
+        let mut app = App::new(repo.path().to_path_buf(), Scope::Uncommitted, None);
+        app.set_plugin_config(crate::config::plugin_config_in(config_dir.path()).unwrap());
+        let (tx, _rx) = mpsc::channel();
+        let mut epoch = 0;
+        let mut recovery_inflight = false;
+        let mut pr = PrCoordinator::new(true);
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        // A pristine press, so the completion copies nothing and no clipboard runs.
+        let press = Gesture::Text {
+            drag: TextDrag {
+                surface: Surface::Read,
+                anchor: Point { row: 0, chr: 0 },
+                extent: Point { row: 0, chr: 0 },
+            },
+            count: 1,
+        };
+
+        // An unchanged observation leaves the gesture alone.
+        app.gesture = press;
+        super::reconcile_plugin_config(
+            &mut app,
+            &cfg,
+            area,
+            &mut epoch,
+            &tx,
+            &mut recovery_inflight,
+            &mut pr,
+        );
+        assert!(app.gesture_active(), "an unchanged config leaves the gesture alive");
+
+        // The end table's config row: a theme change ends the gesture at the boundary,
+        // before the new frame applies (specs/text-selection.md).
+        std::fs::write(&path, "theme = \"nord\"\n").unwrap();
+        super::reconcile_plugin_config(
+            &mut app,
+            &cfg,
+            area,
+            &mut epoch,
+            &tx,
+            &mut recovery_inflight,
+            &mut pr,
+        );
+        assert!(!app.gesture_active(), "the theme change completes the gesture");
+        assert_eq!(app.plugin_config().unwrap().theme(), "nord");
     }
 
     #[test]

@@ -209,6 +209,7 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
         area,
         &[],
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     assert_eq!(app.mode, Mode::Normal, "a first click on the armed row sends");

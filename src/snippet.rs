@@ -118,7 +118,7 @@ pub(crate) fn snippet_caption_sign(rows: &[Row], start: u32, end: u32, side: Sid
     }
 }
 
-/// Whether this row is the comment subject (peach).
+/// Whether this row is the comment subject (orange).
 pub(crate) fn snippet_row_is_comment(row: &Row, start: u32, end: u32, side: Side) -> bool {
     let (start, end) = ordered(start, end);
     match row {

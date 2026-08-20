@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-24
-Last edited: 2026-08-15
+Last edited: 2026-08-19
 ---
 
 # Diff view
@@ -30,7 +30,8 @@ What the reviewer sees (unified view, a renamed TypeScript file):
 ```
 
 - Code has syntax highlight. The changed words have a brighter background.
-- The gutter is a line number plus a change bar of one cell. The bar is red on a deletion. The bar is green on an insertion. The bar is blank on context. There is no `+` glyph or `−` glyph on the screen.
+- The gutter is a line number plus a change bar of one cell. The bar is red on a deletion. The bar is green on an insertion. The bar is blank on context. There is no `+` glyph or `−` glyph that marks a change on the screen.
+- When the pointer hovers a content row, a `[+]` button replaces the row's line number. It sits right-aligned, as the numbers are, in `orange`, the comment composer's accent (`theme.md`). The change bar stays. The `+` advertises the gutter comment gesture (`input.md`) and shows only where that gesture works, so a PR snippet row shows none. The whole gutter width takes the click and the drag. A continuation row's gutter belongs to its logical row. Each frame recomputes the `+` from the pointer's last reported cell, and a cell holding no commentable row shows none.
 - A run of unchanged lines that is longer than the context margin becomes a `⋯ N unmodified lines` fold.
 
 ### FileDiff
@@ -92,7 +93,7 @@ A markdown file adds a shown preview. The preview is in both views.
 - If a file stops the preview, an open preview goes back to source. The toggle does not operate. This is a forced return. The file stops the preview when it is renamed away, deleted, or degraded.
 - The pane title has a `· preview` suffix while the preview is open.
 - The preview choice stays across refreshes of the same file. Opening a file starts in source.
-- The preview only reads. Selection does not operate. Comments do not operate. Comment cards do not show. There is no cursor.
+- The preview only reads. Line selection does not operate. Text selection operates (`text-selection.md`). Comments do not operate. Comment cards do not show. There is no cursor.
 - When the preview opens, a live selection is cleared.
 - `down`, `up`, the page keys, and the wheel scroll the preview by line. There is no gutter. The scroll stops when the last line is at the bottom edge of the pane. A refresh keeps the preview scroll. The tab sets the scroll to a valid position in the same way.
 - If a preview is higher than the pane, a scrollbar shows on the right border of the pane. If the preview fits, there is no scrollbar.
@@ -172,3 +173,4 @@ The viewer only reads. The viewer is computed again on each refresh. The viewer 
 - [markdown](./markdown.md)
 - [find-in-file](./find-in-file.md)
 - [pr-tab](./pr-tab.md)
+- [text-selection](./text-selection.md)

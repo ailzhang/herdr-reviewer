@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-29
-Last edited: 2026-07-31
+Last edited: 2026-08-19
 ---
 
 # Theme
@@ -21,27 +21,28 @@ theme = "tokyo-night"
 
 The anchors, shown with the default `catppuccin` (Mocha) values:
 
-| anchor     | role                                          | example   |
-| ---------- | ---------------------------------------------- | --------- |
-| `base`     | derivation reference and diff-fill background  | `#1e1e2e` |
-| `text`     | primary foreground                             | `#cdd6f4` |
-| `red`      | deletion accent                                | `#f38ba8` |
-| `green`    | insertion accent                               | `#a6e3a1` |
-| `yellow`   | warning and draft accent                       | `#f9e2af` |
-| `peach`    | secondary accent                               | `#fab387` |
-| `mauve`    | merged and keyword accent                      | `#cba6f7` |
-| `lavender` | link and focus accent                          | `#b4befe` |
+| anchor   | role                                          | example   |
+| -------- | --------------------------------------------- | --------- |
+| `base`   | derivation reference and diff-fill background | `#1e1e2e` |
+| `text`   | primary foreground                            | `#cdd6f4` |
+| `red`    | deletion accent                               | `#f38ba8` |
+| `green`  | insertion accent                              | `#a6e3a1` |
+| `yellow` | warning and draft accent                      | `#f9e2af` |
+| `orange` | secondary and comment accent                  | `#fab387` |
+| `purple` | merged and keyword accent                     | `#cba6f7` |
+| `blue`   | link and focus accent                         | `#b4befe` |
 
 The derived slots:
 
-| derived slot                  | derived from                             | use                              |
+| derived slot                  | derived from                              | use                              |
 | ----------------------------- | ----------------------------------------- | -------------------------------- |
-| `surface0/1/2`                | `base`, stepped toward the foreground     | fold, selection, cursor fills    |
-| `overlay0/1`                  | `base`, stepped further                   | borders, dim chrome              |
-| `subtext0`                    | `text`, dimmed toward `base`              | secondary text                   |
+| `surface0/1/2`                | `base`, stepped toward the foreground     | fold, line-selection, cursor fills |
+| `dim2/1`                      | `base`, stepped further                   | borders, dim chrome              |
+| `dim0`                        | `text`, dimmed toward `base`              | secondary text                   |
 | `del_bg` / `ins_bg`           | `red` / `green` blended over `base`       | deletion / insertion row tint    |
 | `emph_del_bg` / `emph_ins_bg` | `red` / `green`, a stronger blend         | word-emphasis fill               |
 | `match_hl`                    | `yellow`, a stronger blend                | search match highlight           |
+| `sel_bg`                      | `blue` saturated, a stronger blend        | text-selection highlight         |
 
 The theme set:
 
@@ -59,7 +60,7 @@ A herdr name outside this set (`kanagawa`, `kanagawa-lotus`, `vesper`, `terminal
 - Each theme declares its `appearance`, light or dark. Dark themes lighten `base` for surfaces, light themes darken it.
 - The cursor, selection, and fold fills step `surface2` > `surface1` > `surface0`. The cursor is the strongest contrast, a fold the faintest.
 - Every visible pane fills its cursor row. The focused pane fills with `surface2`, the other with `surface1`, so which pane holds focus reads at a glance. A hidden navigator leaves one pane, filled with `surface2` (`tui.md`).
-- Dim text on a filled row lifts from `overlay0` to `subtext0`, in every list that fills a row. The file list's indent, a search hit's line number, and a picker row's state and tab all stay readable under the fill.
+- Dim text on a filled row lifts from `dim2` to `dim0`, in every list that fills a row. The file list's indent, a search hit's line number, and a picker row's state and tab all stay readable under the fill.
 - `catppuccin` pins its whole palette as a literal and renders as faithful Catppuccin Mocha.
 
 ### Diff-fill legibility

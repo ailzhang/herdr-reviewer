@@ -129,7 +129,7 @@ mod tests {
         let spans = &lines[0];
         assert!(spans.len() > 1, "rust tokenizes into several spans");
         assert_eq!(spans.iter().map(|s| s.text.as_str()).collect::<String>(), "let x = 1;");
-        // The Catppuccin keyword color (mauve) differs from the default text color.
+        // The Catppuccin keyword color (purple) differs from the default text color.
         assert!(spans.iter().any(|s| s.text == "let" && s.color != (0xcd, 0xd6, 0xf4)));
     }
 

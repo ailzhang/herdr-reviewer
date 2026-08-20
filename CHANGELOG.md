@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Mouse text selection.** Drag over any text — a diff line, a filename, PR comment text, the
+  markdown preview — to select it character by character. Releasing copies the source text to
+  the clipboard, and the selection stays highlighted until your next action. A drag released
+  past the pane border still copies what was highlighted. A double-click copies the word
+  under the pointer, and a triple-click copies the whole line. In the file tree, a drag
+  copies the spanned rows' full paths, directories included, and a double-click copies
+  one row's.
+  ([#62](https://github.com/persiyanov/herdr-reviewr/issues/62))
+- **Gutter commenting.** Hovering a line shows a `[+]` over its line number. Click the gutter
+  to comment that line, or drag along it to comment a range — the composer opens on release.
+
+### Changed
+- **Dragging over diff text no longer selects a line range.** Range selection by mouse moved
+  to the gutter. The keyboard `v` selection is unchanged.
+
 ## [0.33.0] — 2026-08-19
 
 ### Added

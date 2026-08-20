@@ -39,9 +39,11 @@ painted frame:
 python3 scripts/bench_tui.py --binary target/release/herdr-reviewr --fixture
 ```
 
-Baselines live in `scripts/bench-results/`. For anything touching the reload, render, git, or
-highlight paths, run it before and after under the same system load and put both numbers in the
-PR. `examples/bench_latency.rs` attributes a slow number to its component calls.
+The one committed baseline is `scripts/bench-results/baseline.json`. Replace it when a change
+moves the numbers, and keep per-round A/B runs out of the tree. For anything touching the
+reload, render, git, or highlight paths, run it before and after under the same system load and
+put both numbers in the PR. `examples/bench_latency.rs` attributes a slow number to its
+component calls.
 
 ## Pull requests
 

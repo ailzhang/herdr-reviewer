@@ -18,7 +18,8 @@ One persistent pane, pointed at a git worktree:
 
 - **Diff review** — the agent's changed files, syntax-highlighted.
 - **Last-turn diff** — what the worktree's latest turn changed, on its own.
-- **Line comments** — select a range, write a note. One keystroke sends every note to the agent.
+- **Line comments** — select a range or click the `+` gutter, write a note. One keystroke sends every note to the agent.
+- **Text selection** — drag over any text to copy it, like an editor. Double-click copies a word, triple-click a line, and what you copied stays highlighted.
 - **File viewer** — any file's current content from the whole worktree.
 - **Search** — fuzzy file names and live code grep across the worktree, powered by [fff](https://github.com/dmtrKovalenko/fff).
 - **Find in file** — search the open file and step between every match.
@@ -78,7 +79,7 @@ Open reviewr next to your agent:
 1. **Pick a file.** Changed files are in the navigator. `j` / `k` moves, the diff follows. Or
    `]` walks the changes hunk by hunk, file after file.
 2. **Focus the diff.** `Tab` switches panes.
-3. **Select lines.** `v`, then `j` / `k` to extend (or click-drag).
+3. **Select lines.** `v`, then `j` / `k` to extend (or click or drag the gutter).
 4. **Comment.** `c`, type, `Enter`.
 5. **Send.** `s` sends every comment to the agent's input.
 
@@ -158,8 +159,14 @@ jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
 | `o` | Open PR in browser |
 | `r` | Refresh |
 
-The mouse works too: click files and tabs, drag to select, scroll. A link in rendered markdown
-opens in your browser (`http`/`https` only), and an anchor link jumps to its heading.
+The mouse works too. Drag over any text to select it and copy it on release, exactly like an
+editor. Double-click a word to copy just that word, triple-click to copy the whole line, or
+double-click a file in the tree to copy its full path. What you copied stays highlighted
+until your next action. Hover a line
+and a `[+]` appears over its line number. Click it to comment that line, or drag along the
+gutter to comment a range. Click files and tabs, and scroll with the
+wheel. A link in rendered markdown opens in your browser (`http`/`https` only), and an anchor
+link jumps to its heading.
 
 ## The three tabs
 

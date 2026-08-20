@@ -24,40 +24,41 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 - The base picker filters through a text field with the comment editor's controls, moves through the arrows, and closes on `esc`. Its keys are fixed like every text field's, whatever `down` / `up` are bound to.
 - Prose and mockups elsewhere show the default keys.
 
-| action                                                   | does                                        | keys                                        | mouse                         |
-| -------------------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ----------------------------- |
-| `down` / `up`                                            | move the cursor in the focused pane         | `j` / `k` / `↓` / `↑`                       | click a row                   |
-| `next-hunk` / `prev-hunk`                                | jump to the next / previous hunk            | `]` / `[`                                   | —                             |
-| `next-file` / `prev-file`                                | jump to the next / previous file            | `f` / `F`                                   | —                             |
-| `collapse` / `expand`                                    | collapse / expand, else scroll sideways     | `←` / `→`                                   | click the directory or `⋯` row |
-| —                                                        | switch focus between list and diff          | `tab`                                       | click a pane                  |
-| `page-up` / `page-down`                                  | move a page                                 | `PageUp` / `PageDown`                       | —                             |
-| `half-up` / `half-down`                                  | move a half page                            | `ctrl+u` / `ctrl+d`                         | —                             |
-| —                                                        | scroll the viewport, selection put          | —                                           | wheel over the pane           |
-| `scope-uncommitted` / `scope-branch` / `scope-last-turn` | switch scope                                | `u` / `b` / `t`                             | click the scope chip to cycle |
-| `base-pick`                                              | open the base picker                        | `B`                                         | click the base name           |
-| `tab-changes` / `tab-all-files` / `tab-pr`               | switch tab                                  | `1` / `2` / `3`                             | click a tab name              |
-| —                                                        | open a link in rendered markdown            | —                                           | click the link                |
-| `wrap`                                                   | toggle line wrap                            | `w`                                         | —                             |
-| `preview`                                                | toggle the markdown preview                 | `m`                                         | —                             |
-| `navigator-position`                                     | move the navigator clockwise                | `p`                                         | —                             |
-| `navigator-hide`                                         | hide / show the navigator                   | `z`                                         | —                             |
-| `navigator-grow` / `navigator-shrink`                    | grow / shrink the navigator                 | `<` / `>`                                   | drag the divider              |
-| `select`                                                 | select a line range, removed lines included | `v` then move                               | click-drag in the diff        |
-| —                                                        | clear the selection                         | `esc`                                       | —                             |
-| `comment`                                                | comment on the selection                    | `c`, type, `enter`                          | after a drag-select           |
-| `edit`                                                   | edit the comment under the cursor           | `e`                                         | —                             |
-| `delete`                                                 | delete the comment under the cursor         | `d`                                         | —                             |
-| `next-comment` / `prev-comment`                          | jump to next / previous comment             | `n` / `N`                                   | —                             |
-| `comments`                                               | list and manage all comments                | `l`                                         | —                             |
-| `search`                                                 | open the search screen (`search.md`)        | `/`                                         | —                             |
-| `find`                                                   | open in-file find (`find-in-file.md`)       | `ctrl+f`                                    | —                             |
-| `keys`                                                   | toggle the footer's full shortcut list      | `?`                                         | —                             |
-| `send`                                                   | send all comments to the agent              | `s` / `S`                                   | —                             |
-| `copy`                                                   | copy all comments to the clipboard          | `y` / `Y`                                   | —                             |
-| `open-pr`                                                | open the PR in the browser (`pr-tab.md`)    | `o`                                         | click the status chip         |
-| `refresh`                                                | refresh now                                 | `r`                                         | —                             |
-| `quit`                                                   | quit                                        | `q`                                         | —                             |
+| action                                                   | does                                        | keys                                        | mouse                                          |
+| -------------------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ---------------------------------------------- |
+| `down` / `up`                                            | move the cursor in the focused pane         | `j` / `k` / `↓` / `↑`                       | click a row                                    |
+| `next-hunk` / `prev-hunk`                                | jump to the next / previous hunk            | `]` / `[`                                   | —                                              |
+| `next-file` / `prev-file`                                | jump to the next / previous file            | `f` / `F`                                   | —                                              |
+| `collapse` / `expand`                                    | collapse / expand, else scroll sideways     | `←` / `→`                                   | click the directory or `⋯` row                 |
+| —                                                        | switch focus between list and diff          | `tab`                                       | click a pane                                   |
+| `page-up` / `page-down`                                  | move a page                                 | `PageUp` / `PageDown`                       | —                                              |
+| `half-up` / `half-down`                                  | move a half page                            | `ctrl+u` / `ctrl+d`                         | —                                              |
+| —                                                        | scroll the viewport, selection put          | —                                           | wheel over the pane                            |
+| `scope-uncommitted` / `scope-branch` / `scope-last-turn` | switch scope                                | `u` / `b` / `t`                             | click the scope chip to cycle                  |
+| `base-pick`                                              | open the base picker                        | `B`                                         | click the base name                            |
+| `tab-changes` / `tab-all-files` / `tab-pr`               | switch tab                                  | `1` / `2` / `3`                             | click a tab name                               |
+| —                                                        | open a link in rendered markdown            | —                                           | click the link                                 |
+| `wrap`                                                   | toggle line wrap                            | `w`                                         | —                                              |
+| `preview`                                                | toggle the markdown preview                 | `m`                                         | —                                              |
+| `navigator-position`                                     | move the navigator clockwise                | `p`                                         | —                                              |
+| `navigator-hide`                                         | hide / show the navigator                   | `z`                                         | —                                              |
+| `navigator-grow` / `navigator-shrink`                    | grow / shrink the navigator                 | `<` / `>`                                   | drag the divider                               |
+| `select`                                                 | select a line range, removed lines included | `v` then move                               | —                                              |
+| —                                                        | clear the selection                         | `esc`                                       | —                                              |
+| `comment`                                                | comment on the selection                    | `c`, type, `enter`                          | click or drag the gutter                       |
+| —                                                        | copy text (`text-selection.md`)             | —                                           | drag over text                                 |
+| `edit`                                                   | edit the comment under the cursor           | `e`                                         | —                                              |
+| `delete`                                                 | delete the comment under the cursor         | `d`                                         | —                                              |
+| `next-comment` / `prev-comment`                          | jump to next / previous comment             | `n` / `N`                                   | —                                              |
+| `comments`                                               | list and manage all comments                | `l`                                         | —                                              |
+| `search`                                                 | open the search screen (`search.md`)        | `/`                                         | —                                              |
+| `find`                                                   | open in-file find (`find-in-file.md`)       | `ctrl+f`                                    | —                                              |
+| `keys`                                                   | toggle the footer's full shortcut list      | `?`                                         | —                                              |
+| `send`                                                   | send all comments to the agent              | `s` / `S`                                   | —                                              |
+| `copy`                                                   | copy all comments to the clipboard          | `y` / `Y`                                   | —                                              |
+| `open-pr`                                                | open the PR in the browser (`pr-tab.md`)    | `o`                                         | click the status chip                          |
+| `refresh`                                                | refresh now                                 | `r`                                         | —                                              |
+| `quit`                                                   | quit                                        | `q`                                         | —                                              |
 
 `navigator-position` cycles `right` → `bottom` → `left` → `top` → `right`.
 
@@ -69,7 +70,7 @@ Outside the hidden-state rules above, these four navigator actions work from eit
 
 A divider drag belongs to the navigator position and split axis at mouse-down. A keypress, terminal resize, or config-driven layout change cancels it. A cancelled drag keeps its last painted share, and the cancelling keypress still performs its own action. After cancellation, drag events are consumed until mouse-up rather than becoming a selection in the read pane.
 
-Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
+Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. The mouse path is the gutter, advertised by its hover `+` (`diff-view.md`). A gutter click opens the box on that line, acting as `c` there. A gutter drag selects the spanned range and opens the box on release. A gutter drag follows the line selection's rules: content rows only, never across a fold. It scrolls at the pane's edge and under the wheel like a text drag, and it ends by the text gesture's end table (`text-selection.md`). While the comment editor is open, the gutter is inert, like the base-name click. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
 
 ## Behavior
 
@@ -288,7 +289,7 @@ The filter is a text field with the comment editor's controls, above. `↑` and 
 
 ## Non-goals
 
-- No text selection, cut/copy, undo/redo, markdown rendering, or click-to-place-caret in the comment editor.
+- No text selection (`text-selection.md`), cut/copy, undo/redo, markdown rendering, or click-to-place-caret in the comment editor.
 - No multi-key sequence bindings. A binding is one key, alone or with a `ctrl+`/`alt+` prefix.
 - No `down` / `up` crossing at a file's edges. The line cursor clamps there.
 - The `?` expansion omits the navigator-resize keys, the half-page keys, and the `expand` / `collapse` keys. Resizing is a divider drag first, and the fold and scroll meanings are contextual row-1 actions.
@@ -303,3 +304,4 @@ The filter is a text field with the comment editor's controls, above. `↑` and 
 - [pr-tab](./pr-tab.md)
 - [search](./search.md)
 - [find-in-file](./find-in-file.md)
+- [text-selection](./text-selection.md)

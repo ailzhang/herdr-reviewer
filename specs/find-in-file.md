@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-20
-Last edited: 2026-07-21
+Last edited: 2026-08-19
 ---
 
 # Find in file
@@ -51,6 +51,7 @@ Literal search within the open file in the read pane, opened with `ctrl+f`: ever
 ## Closing
 
 - `esc` closes the band and clears the highlight. Focus stays on the read pane, the cursor where the last step left it, or unmoved if no step happened.
+- A gutter release closes the band before its composer opens (`input.md`). This is a forced return: the composer replaces the band's row, and the highlight must not outlive the way to close it.
 - Closing drops the query, so reopening starts empty.
 
 ## Where it works

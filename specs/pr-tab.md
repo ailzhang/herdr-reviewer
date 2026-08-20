@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-08-17
+Last edited: 2026-08-19
 ---
 
 # PR tab
@@ -40,7 +40,7 @@ The name of the tab is `PR` on each forge. The body text, the chip, the title of
 ### Header and footer
 
 - The header puts a `status #226 ↗` chip on the right. You can click the chip.
-- The color of the status is the color of the life cycle: `open` is green, `draft` is yellow, `merged` is mauve, `closed` is red.
+- The color of the status is the color of the life cycle: `open` is green, `draft` is yellow, `merged` is purple, `closed` is red.
 - The `draft` status shows only while the PR is open.
 - The title of the PR is on the left of the chip. The tab cuts the title if the title is too long.
 - The selected head branch (`head_ref`, `forge-host.md`) is between the title and the chip. The branch is dim.

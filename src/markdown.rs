@@ -191,7 +191,7 @@ impl Renderer<'_> {
                 }
             }
             Event::Code(t) => {
-                let style = self.current_style().fg(self.p.peach);
+                let style = self.current_style().fg(self.p.orange);
                 self.push_text(&t, style);
             }
             Event::SoftBreak => self.push_text(" ", self.current_style()),
@@ -207,7 +207,7 @@ impl Renderer<'_> {
                 let budget = self.budget(self.prefix(None).0.width());
                 let line = Line::from(vec![
                     self.prefix(None).0,
-                    Span::styled("─".repeat(budget), Style::default().fg(self.p.overlay0)),
+                    Span::styled("─".repeat(budget), Style::default().fg(self.p.dim2)),
                 ]);
                 self.push_plain_line(line);
                 self.needs_blank = true;
@@ -216,13 +216,13 @@ impl Renderer<'_> {
             // decides — an inline tag stays inline (`## <a name="x"></a>Title` is one
             // heading), a block becomes its own dim lines (`specs/markdown.md`).
             Event::InlineHtml(t) => {
-                let style = Style::default().fg(self.p.overlay0);
+                let style = Style::default().fg(self.p.dim2);
                 let link = self.current_link();
                 // Straight to the chunks: tag text never enters a heading's slug.
                 self.push_chunk(sanitize(&t), style, link);
             }
             Event::Html(t) => {
-                let style = Style::default().fg(self.p.overlay0);
+                let style = Style::default().fg(self.p.dim2);
                 if self.table.is_some() {
                     self.push_chunk(sanitize(&t), style, None);
                 } else {
@@ -296,8 +296,8 @@ impl Renderer<'_> {
                 let at = self.chunk_len();
                 self.urls.push(std::sync::Arc::from(dest_url.as_ref()));
                 self.links.push((self.urls.len() - 1, at));
-                let lavender = self.p.lavender;
-                self.push_style(|s| s.fg(lavender).add_modifier(Modifier::UNDERLINED));
+                let blue = self.p.blue;
+                self.push_style(|s| s.fg(blue).add_modifier(Modifier::UNDERLINED));
             }
             Tag::Image { .. } => {
                 let at = self.chunk_len();
@@ -407,9 +407,9 @@ impl Renderer<'_> {
     /// Heading style: bold in an accent, deeper levels dimmer (`specs/markdown.md`).
     fn heading_style(&self, level: HeadingLevel) -> Style {
         let fg = match level {
-            HeadingLevel::H1 | HeadingLevel::H2 => self.p.mauve,
-            HeadingLevel::H3 => self.p.lavender,
-            _ => self.p.subtext0,
+            HeadingLevel::H1 | HeadingLevel::H2 => self.p.purple,
+            HeadingLevel::H3 => self.p.blue,
+            _ => self.p.dim0,
         };
         Style::default().fg(fg).add_modifier(Modifier::BOLD)
     }
@@ -424,7 +424,7 @@ impl Renderer<'_> {
         let dest = self.urls[id].clone();
         let text: String = self.chunks_mut()[start..].iter().map(|c| c.text.as_str()).collect();
         if !dest.is_empty() && text != *dest {
-            let style = Style::default().fg(self.p.overlay0);
+            let style = Style::default().fg(self.p.dim2);
             // The dim destination shares the click target with the text (`specs/markdown.md`).
             self.push_chunk(format!(" ({})", sanitize(&dest)), style, Some(id));
         }
@@ -438,7 +438,7 @@ impl Renderer<'_> {
         if let Some(h) = &mut self.heading_text {
             h.truncate(heading_len);
         }
-        let style = Style::default().fg(self.p.overlay0);
+        let style = Style::default().fg(self.p.dim2);
         let chunks = self.chunks_mut();
         let alt: String = chunks[start..].iter().map(|c| c.text.as_str()).collect();
         chunks.truncate(start);
@@ -460,7 +460,7 @@ impl Renderer<'_> {
         let marker = marker.unwrap_or("");
         let first = format!("{bars}{gap}{indent}{marker}");
         let cont = format!("{bars}{gap}{indent}{}", " ".repeat(marker.width()));
-        let style = Style::default().fg(self.p.overlay0);
+        let style = Style::default().fg(self.p.dim2);
         (Span::styled(first, style), Span::styled(cont, style))
     }
 
@@ -498,7 +498,7 @@ impl Renderer<'_> {
             self.out.lines.push(if bars.is_empty() {
                 Line::default()
             } else {
-                Line::from(Span::styled(bars, Style::default().fg(self.p.overlay0)))
+                Line::from(Span::styled(bars, Style::default().fg(self.p.dim2)))
             });
         }
         self.needs_blank = false;
@@ -549,7 +549,7 @@ impl Renderer<'_> {
     fn emit_fragments(&mut self, fragments: Vec<(String, Style)>, extra_indent: &str) {
         let marker = self.marker.take();
         let (first, cont) = self.prefix(marker.as_deref());
-        let style = Style::default().fg(self.p.overlay0);
+        let style = Style::default().fg(self.p.dim2);
         let first = Span::styled(format!("{}{extra_indent}", first.content), style);
         let cont = Span::styled(format!("{}{extra_indent}", cont.content), style);
         let budget = self.budget(cont.width());
@@ -652,7 +652,7 @@ impl Renderer<'_> {
 
         if deficit > 0 {
             // Over-wide at every floor: the table renders as its source text instead.
-            let style = Style::default().fg(self.p.overlay0);
+            let style = Style::default().fg(self.p.dim2);
             let src = self.source.get(table.range.clone()).unwrap_or("");
             for src_line in src.trim_end_matches('\n').split('\n') {
                 self.emit_fragments(vec![(sanitize(src_line), style)], "");
@@ -661,7 +661,7 @@ impl Renderer<'_> {
             return;
         }
 
-        let dim = Style::default().fg(self.p.overlay0);
+        let dim = Style::default().fg(self.p.dim2);
         for (r, row) in table.rows.iter().enumerate() {
             let head = r < table.head_rows;
             let style_of =
@@ -966,14 +966,14 @@ mod tests {
         assert_eq!(texts(&lines), vec!["Install"]);
         let span = &lines[0].spans[1]; // [0] is the (empty) prefix
         assert!(span.style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(span.style.fg, Some(p.mauve));
+        assert_eq!(span.style.fg, Some(p.purple));
     }
 
     #[test]
     fn deeper_headings_dim() {
         let (hl, p) = setup();
         let h4 = render_lines("#### Notes", 80, &hl, &p);
-        assert_eq!(h4[0].spans[1].style.fg, Some(p.subtext0));
+        assert_eq!(h4[0].spans[1].style.fg, Some(p.dim0));
     }
 
     #[test]
@@ -992,7 +992,7 @@ mod tests {
         let (hl, p) = setup();
         let lines = render_lines("run `cargo test` now", 80, &hl, &p);
         let code = lines[0].spans.iter().find(|s| s.content.contains("cargo test")).unwrap();
-        assert_eq!(code.style.fg, Some(p.peach));
+        assert_eq!(code.style.fg, Some(p.orange));
     }
 
     #[test]
@@ -1023,7 +1023,7 @@ mod tests {
         let text = text_of(&lines[0]);
         assert_eq!(text, "see the run (https://ci.example/1)");
         let dest = lines[0].spans.iter().find(|s| s.content.contains("ci.example")).unwrap();
-        assert_eq!(dest.style.fg, Some(p.overlay0));
+        assert_eq!(dest.style.fg, Some(p.dim2));
         let label = lines[0].spans.iter().find(|s| s.content.contains("the run")).unwrap();
         assert!(label.style.add_modifier.contains(Modifier::UNDERLINED));
 
@@ -1247,7 +1247,7 @@ mod tests {
         let t = texts(&lines);
         assert!(t.iter().any(|l| l.contains("<details>")), "{t:?}");
         let span = lines[0].spans.iter().find(|s| s.content.contains("<details>")).unwrap();
-        assert_eq!(span.style.fg, Some(p.overlay0));
+        assert_eq!(span.style.fg, Some(p.dim2));
     }
 
     #[test]
@@ -1267,10 +1267,8 @@ mod tests {
             &hl,
             &p,
         );
-        let named = [
-            p.text, p.subtext0, p.overlay0, p.overlay1, p.mauve, p.lavender, p.peach, p.red,
-            p.green, p.yellow,
-        ];
+        let named =
+            [p.text, p.dim0, p.dim2, p.dim1, p.purple, p.blue, p.orange, p.red, p.green, p.yellow];
         for line in &lines {
             for span in &line.spans {
                 if let Some(fg) = span.style.fg {

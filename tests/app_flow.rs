@@ -1486,6 +1486,7 @@ fn divider_drag_math_and_keyboard_clamps_follow_all_four_positions() {
             area,
             &heights,
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
         handle_mouse(
@@ -1494,6 +1495,7 @@ fn divider_drag_math_and_keyboard_clamps_follow_all_four_positions() {
             area,
             &heights,
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
         handle_mouse(
@@ -1502,6 +1504,7 @@ fn divider_drag_math_and_keyboard_clamps_follow_all_four_positions() {
             area,
             &heights,
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
         assert_eq!(app.navigator_share(), 40, "event-level drag math for {position:?}");
@@ -1751,6 +1754,7 @@ fn divider_drag_cancels_until_mouse_up() {
         area,
         &heights,
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     handle_mouse(
@@ -1759,6 +1763,7 @@ fn divider_drag_cancels_until_mouse_up() {
         area,
         &heights,
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     let resized = app.navigator_side_pct;
@@ -1772,6 +1777,7 @@ fn divider_drag_cancels_until_mouse_up() {
         area,
         &heights,
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     assert_eq!(app.navigator_side_pct, resized);
@@ -1783,6 +1789,7 @@ fn divider_drag_cancels_until_mouse_up() {
         area,
         &heights,
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     assert!(!app.divider_drag_cancelled());
@@ -1800,6 +1807,7 @@ fn divider_drag_cancels_until_mouse_up() {
         area,
         &heights,
         &keymap,
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     assert!(!app.divider_drag_cancelled());
@@ -1952,6 +1960,30 @@ fn editing_from_the_list_navigates_to_the_comments_file() {
     assert_eq!(app.diff_path.as_deref(), Some("b.rs"), "edit switched to the comment's file");
     let dl = &app.diff.rows[app.diff_cursor];
     assert!(dl.new_no().is_some() || dl.old_no().is_some(), "cursor sits on a real diff line");
+}
+
+#[test]
+fn editing_a_range_comment_opens_the_box_at_the_ranges_last_row() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    app.diff_cursor = 0;
+    let keymap = Keymap::default();
+    press(&mut app, &keymap, KeyCode::Char('v'));
+    press(&mut app, &keymap, KeyCode::Char('j'));
+    press(&mut app, &keymap, KeyCode::Char('j'));
+    press(&mut app, &keymap, KeyCode::Char('c'));
+    for ch in "range note".chars() {
+        app.input_push(ch);
+    }
+    app.submit_comment();
+
+    // The card splices under the range's last row (`card_rows`); `e` reopens the box in
+    // the card's place, never jumping to the range's first line (specs/input.md).
+    app.diff_cursor = 0;
+    app.start_edit();
+    assert!(app.composing());
+    assert_eq!(app.diff_cursor, 2, "the edit box opens at the range's last row");
 }
 
 #[test]
@@ -3330,7 +3362,7 @@ fn mouse(app: &mut App, keymap: &Keymap, kind: MouseEventKind) {
     let area = Rect::new(0, 0, 120, 40);
     let heights = vec![1usize; app.visible.len()];
     let event = MouseEvent { kind, column: 10, row: 10, modifiers: KeyModifiers::NONE };
-    handle_mouse(app, event, area, &heights, keymap).unwrap();
+    handle_mouse(app, event, area, &heights, keymap, &herdr_reviewr::export::Clipboard).unwrap();
 }
 
 #[test]
@@ -4676,6 +4708,7 @@ mod search_overlay {
             area,
             &heights,
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
 
@@ -4691,6 +4724,7 @@ mod search_overlay {
             area,
             &heights,
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
         assert!(!app.divider_drag_captured(), "mouse-up releases the capture");
@@ -5718,4 +5752,858 @@ fn checking_out_a_picked_branch_does_not_turn_it_into_a_pin() {
     );
     assert!(bp.visible()[bp.cursor].oid().is_none(), "the highlight must not be a pin");
     assert_eq!(herdr_reviewr::git::read_base_pick(r.path()).unwrap().as_deref(), Some("dev"));
+}
+
+// ---- mouse text selection (specs/text-selection.md) ----
+
+/// A repo whose one uncommitted file exercises the mapping's hard cases: a plain line, a
+/// tab-indented line, and a wide-character line.
+fn selection_repo() -> Repo {
+    let r = Repo::init();
+    r.write("base.rs", "fn main() {}\n");
+    r.commit_all("init");
+    r.write("m.rs", "alpha beta\n\tif x {\n日本 z\n");
+    r
+}
+
+const SEL_AREA: Rect = Rect::new(0, 0, 120, 40);
+
+thread_local! {
+    /// The clipboard writes captured by [`SelClipboard`], newest last — each test runs on
+    /// its own thread, so captures never cross tests.
+    static SEL_COPIES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The capturing clipboard the gesture tests inject: the suite never touches the real
+/// system clipboard, and every copy asserts its exact payload.
+struct SelClipboard;
+
+impl ExportTarget for SelClipboard {
+    fn label(&self) -> &'static str {
+        "clipboard"
+    }
+    fn success_message(&self, count: usize) -> String {
+        format!("copied {count}")
+    }
+    fn failure_message(&self) -> String {
+        "clipboard failed".to_string()
+    }
+    fn export(&self, text: &str) -> Result<()> {
+        SEL_COPIES.with(|c| c.borrow_mut().push(text.to_string()));
+        Ok(())
+    }
+}
+
+/// The last text [`SelClipboard`] captured on this test's thread.
+fn last_copy() -> Option<String> {
+    SEL_COPIES.with(|c| c.borrow().last().cloned())
+}
+
+/// Dispatch one mouse event at an absolute cell through the event loop's dispatcher,
+/// painting a frame first — hit tests resolve against the recorded painted layout, exactly
+/// as the event loop paints before it reads input (specs/text-selection.md).
+fn sel_mouse(app: &mut App, kind: MouseEventKind, col: u16, row: u16) {
+    let backend = ratatui::backend::TestBackend::new(SEL_AREA.width, SEL_AREA.height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| herdr_reviewr::ui::render(f, app)).unwrap();
+    let heights = herdr_reviewr::ui::diff_row_heights(app, SEL_AREA);
+    let event = MouseEvent { kind, column: col, row, modifiers: KeyModifiers::NONE };
+    handle_mouse(app, event, SEL_AREA, &heights, &Keymap::default(), &SelClipboard).unwrap();
+}
+
+/// The screen cell of `(row, display column)` in the read pane, for a short-lined file where
+/// each row paints one display line: the gutter is one bar cell, a 3-column number, a space.
+fn sel_cell(app: &App, row: usize, display_col: u16) -> (u16, u16) {
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, app);
+    (inner.x + 5 + display_col, inner.y + u16::try_from(row).unwrap())
+}
+
+#[test]
+fn a_text_drag_maps_tabs_and_wide_chars_and_extracts_source_text() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    // Anchor on `beta` (row 0, char 6); extend to row 2's `z` (char 3, at display column 5
+    // past the two wide glyphs).
+    let (c0, r0) = sel_cell(&app, 0, 6);
+    let (c2, r2) = sel_cell(&app, 2, 5);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c2, r2);
+    assert_eq!(herdr_reviewr::drag_text(&app, SEL_AREA).as_deref(), Some("beta\n\tif x {\n日本 z"));
+    // A drag onto the tab's expansion cells selects the tab character itself.
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+    assert_eq!(herdr_reviewr::drag_text(&app, SEL_AREA).as_deref(), Some("beta\n\t"));
+    // A keypress cancels the drag: nothing copies, and the key still acts.
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+    assert!(app.text_drag().is_none());
+    assert_eq!(app.status, "");
+}
+
+#[test]
+fn a_release_on_the_mouse_down_cell_is_a_click_and_a_real_drag_copies() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c1, r1) = sel_cell(&app, 1, 3);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c1, r1);
+    assert_eq!(app.diff_cursor, 1, "a same-cell release is the click");
+    assert!(app.text_drag().is_none());
+    assert_eq!(app.status, "");
+
+    // One cell of drift inside the same character (row 1's tab expansion) is still the
+    // click: the release's point never left the anchor's (specs/text-selection.md).
+    app.diff_cursor = 0;
+    let (c1a, _) = sel_cell(&app, 1, 1);
+    let (c1b, _) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c1a, r1);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c1b, r1);
+    assert_eq!(app.diff_cursor, 1, "a slip within the tab's cells still clicks");
+    assert_eq!(app.status, "", "and copies nothing");
+
+    // TS-NO-REVIEW-STATE: a full drag-release cycle touches no review state.
+    let before = app.diff_cursor;
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c2, r2) = sel_cell(&app, 2, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c2, r2);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c2, r2);
+    assert_eq!(app.store.len(), 0);
+    assert!(app.select_anchor.is_none());
+    assert_eq!(app.mode, Mode::Normal);
+    assert_eq!(app.diff_cursor, before);
+    assert!(app.text_drag().is_none());
+    assert_eq!(app.status, "copied 21 chars", "release reports the copy");
+    assert_eq!(last_copy().as_deref(), Some("alpha beta\n\tif x {\n日本"));
+}
+
+#[test]
+fn ts_one_surface_a_drag_clamps_to_its_pane_and_skips_cards() {
+    use herdr_reviewr::selection::Surface;
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    // Extend into the navigator pane: the extent clamps into the read pane.
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let files = herdr_reviewr::ui::files_inner_rect(SEL_AREA, &app);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), files.x + 2, files.y + 1);
+    let drag = app.text_drag().expect("drag still live");
+    assert_eq!(drag.surface, Surface::Read);
+    assert!(drag.extent.row < app.visible.len());
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+
+    // A code drag driven across a spliced comment card's screen rows copies no card text:
+    // the card sits under row 1 as three display lines (border, body, border), and row 2's
+    // code paints below them.
+    app.focus = Focus::Diff;
+    app.diff_cursor = 1;
+    press(&mut app, &Keymap::default(), KeyCode::Char('c'));
+    typed(&mut app, "watch this");
+    press(&mut app, &Keymap::default(), KeyCode::Enter);
+    assert_eq!(app.store.len(), 1);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), inner.x + 5 + 5, inner.y + 5);
+    let drag = app.text_drag().expect("drag still live");
+    assert_eq!(drag.extent.row, 2, "the extent lands on row 2's code below the card");
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x + 5 + 5, inner.y + 5);
+    assert_eq!(app.status, "copied 23 chars");
+    let text = last_copy().unwrap();
+    assert_eq!(text, "alpha beta\n\tif x {\n日本 z");
+    assert!(!text.contains("watch this"), "spanned cards contribute nothing");
+
+    // A drag that starts on the card selects that card's text, confined to it.
+    app.status.clear();
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x + 4, inner.y + 3);
+    assert!(matches!(
+        app.text_drag().expect("card drag armed").surface,
+        Surface::Card { comment: 0 }
+    ));
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), inner.x + 4 + 9, inner.y + 3);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x + 4 + 9, inner.y + 3);
+    assert_eq!(app.status, "copied 10 chars");
+    assert_eq!(last_copy().as_deref(), Some("watch this"), "the card's own text copies");
+
+    // A double on the card copies the word under the cell; no composer opens over the card
+    // (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x + 4, inner.y + 3);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x + 4, inner.y + 3);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x + 4, inner.y + 3);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x + 4, inner.y + 3);
+    assert!(!app.composing(), "a card double-click never opens the composer");
+    assert_eq!(last_copy().as_deref(), Some("watch"), "the card word copies");
+}
+
+#[test]
+fn the_gutter_click_and_drag_open_the_composer_and_stay_inert_while_composing() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let gutter_x = inner.x + 1;
+
+    // A gutter click opens the composer on that line, acting as `c` there.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), gutter_x, inner.y);
+    assert!(app.gutter_drag());
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), gutter_x, inner.y);
+    assert!(app.composing());
+    assert_eq!(app.selection_range(), (0, 0));
+
+    // While the comment editor is open, the gutter is inert.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), gutter_x, inner.y + 2);
+    assert!(!app.gutter_drag());
+    assert!(app.text_drag().is_none());
+
+    // A double-click on the frozen view still copies its word — a selection copy, not a
+    // pane click — and the composer holds its line untouched (specs/text-selection.md).
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert!(app.composing(), "the open composer survives a double-click");
+    assert_eq!(app.selection_range(), (0, 0), "the draft's anchor never moves");
+    assert_eq!(last_copy().as_deref(), Some("alpha"), "the word still copies while composing");
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+
+    // A gutter drag selects the spanned range and opens the composer on release.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), gutter_x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), gutter_x, inner.y + 2);
+    assert!(app.gutter_drag());
+    assert_eq!(app.selection_range(), (0, 2));
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), gutter_x, inner.y + 2);
+    assert!(app.composing());
+    assert_eq!(app.selection_range(), (0, 2));
+    typed(&mut app, "range note");
+    press(&mut app, &Keymap::default(), KeyCode::Enter);
+    assert_eq!(app.store.len(), 1);
+}
+
+#[test]
+fn a_double_click_copies_the_word_and_settles_its_highlight() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    // A double on a word copies exactly that word and leaves it highlighted
+    // (specs/text-selection.md).
+    let (c0, r0) = sel_cell(&app, 0, 0); // the `a` of `alpha`
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert_eq!(app.status, "", "the first click only moves the cursor");
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert!(!app.composing(), "the double copies, never comments");
+    assert_eq!(app.status, "copied 5 chars");
+    assert_eq!(last_copy().as_deref(), Some("alpha"));
+    let settled = app.settled_selection().expect("the copy leaves its highlight");
+    assert_eq!((settled.anchor.row, settled.anchor.chr, settled.extent.chr), (0, 0, 4));
+
+    // The settled span paints in the selection fill, distinct from the cursor row's
+    // (specs/text-selection.md, theme.md).
+    let backend = ratatui::backend::TestBackend::new(SEL_AREA.width, SEL_AREA.height);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal.draw(|f| herdr_reviewr::ui::render(f, &app)).unwrap();
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let cell = terminal.backend().buffer().cell((inner.x + 5, inner.y)).unwrap();
+    assert_eq!(cell.style().bg, Some(app.palette().sel_bg));
+
+    // Any keypress clears the settled highlight (specs/text-selection.md).
+    press(&mut app, &Keymap::default(), KeyCode::Char('j'));
+    assert!(app.settled_selection().is_none(), "a keypress is the user doing something else");
+
+    // On whitespace the double acts as the click: a tab expansion holds no word.
+    let (c1, r1) = sel_cell(&app, 1, 1);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c1, r1);
+    assert!(!app.composing());
+    assert_eq!(last_copy().as_deref(), Some("alpha"), "nothing new copies on whitespace");
+    assert_eq!(app.diff_cursor, 1, "the whitespace double acted as the click");
+
+    // A keypress mid-drag cancels: nothing copies, and the key still moves the cursor.
+    app.status.clear();
+    let (a0, ar) = sel_cell(&app, 0, 0);
+    let (b2, br) = sel_cell(&app, 2, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), a0, ar);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), b2, br);
+    press(&mut app, &Keymap::default(), KeyCode::Char('j'));
+    assert!(app.text_drag().is_none());
+    assert_eq!(app.status, "");
+    assert_eq!(app.diff_cursor, 2, "the key still moved the cursor down from row 1");
+}
+
+#[test]
+fn a_triple_click_copies_the_whole_line_and_settles_its_highlight() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    // A triple on a line copies the whole source line and leaves it highlighted
+    // (specs/text-selection.md).
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    for _ in 0..3 {
+        sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+        sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    }
+    assert!(!app.composing(), "the triple copies, never comments");
+    assert_eq!(app.status, "copied 10 chars");
+    assert_eq!(last_copy().as_deref(), Some("alpha beta"));
+    let settled = app.settled_selection().expect("the copy leaves its highlight");
+    assert_eq!((settled.anchor.row, settled.anchor.chr, settled.extent.chr), (0, 0, 9));
+
+    // A fourth click within the window repeats the triple (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert_eq!(app.status, "copied 10 chars");
+    assert!(app.settled_selection().is_some(), "the repeat settles the line again");
+}
+
+#[test]
+fn a_settled_highlight_survives_an_unrelated_refresh_and_clears_when_its_text_changes() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    // Settle by drag: a completed drag resets the click chain, so the reconcile below
+    // exercises the settled text-compare alone (specs/text-selection.md).
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c9, _) = sel_cell(&app, 0, 9);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c9, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c9, r0);
+    assert!(app.settled_selection().is_some());
+
+    // An unrelated new file refreshes the world and leaves the spanned text alone.
+    r.write("other.rs", "unrelated\n");
+    app.reload().unwrap();
+    assert!(app.settled_selection().is_some(), "an untouched span survives the refresh");
+
+    // The spanned line's text changes under the poll, same row count: stale never wrong.
+    r.write("m.rs", "ALPHA beta\n\tif x {\n日本 z\n");
+    app.reload().unwrap();
+    assert!(app.settled_selection().is_none(), "changed spanned text blanks the highlight");
+}
+
+#[test]
+fn a_settled_preview_highlight_follows_its_source_text() {
+    let r = Repo::init();
+    r.write("doc.md", "# Title\n\nplain body words\n");
+    r.commit_all("init");
+    r.write("doc.md", "# Title\n\nplain body words changed\n");
+    let mut app = app_on(&r);
+    app.toggle_preview();
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    // Settle the heading word by double-click on the painted surface.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x, inner.y);
+    assert_eq!(last_copy().as_deref(), Some("Title"));
+    assert!(app.settled_selection().is_some());
+
+    // A refresh that leaves the previewed source alone keeps the highlight; one that
+    // rewrites it blanks it — the paint is a pure render of that source
+    // (specs/text-selection.md).
+    app.reload().unwrap();
+    assert!(app.settled_selection().is_some(), "an unchanged preview keeps the highlight");
+    r.write("doc.md", "# Title\n\nrewritten body words here\n");
+    app.reload().unwrap();
+    assert!(app.settled_selection().is_none(), "a rewritten preview blanks the highlight");
+}
+
+#[test]
+fn a_mouse_down_on_blank_space_arms_no_gesture() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    // The pane's blank space below the last content row starts nothing
+    // (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x + 4, inner.y + 20);
+    assert!(app.text_drag().is_none(), "no drag starts on blank space");
+    assert!(!app.gesture_active(), "no gesture arms on blank space");
+}
+
+#[test]
+fn a_drag_release_keeps_the_selection_until_the_next_mouse_down() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 0, 9);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c1, r1);
+    assert_eq!(app.status, "copied 10 chars");
+    assert!(app.settled_selection().is_some(), "the release keeps the highlight as feedback");
+
+    // The wheel is reading, not doing something else: the highlight survives it.
+    sel_mouse(&mut app, MouseEventKind::ScrollDown, c0, r0);
+    assert!(app.settled_selection().is_some(), "scrolling keeps the settled highlight");
+
+    // The next mouse-down clears it before acting (specs/text-selection.md).
+    let (c2, r2) = sel_cell(&app, 2, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c2, r2);
+    assert!(app.settled_selection().is_none(), "a mouse-down is the user doing something else");
+}
+
+#[test]
+fn the_navigator_click_survives_a_one_cell_slip_and_a_row_drag_copies_paths() {
+    let r = selection_repo();
+    r.write("sub/two.rs", "two\n");
+    let mut app = app_on(&r);
+    let files = herdr_reviewr::ui::files_inner_rect(SEL_AREA, &app);
+    let rows = app.file_rows.len();
+    assert!(rows >= 2, "the tree lists m.rs and sub/two.rs");
+
+    // A release one cell over on the same row still activates the row.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), files.x + 2, files.y);
+    assert_eq!(app.file_cursor, 0, "the slipped click still selects the row");
+    assert!(app.text_drag().is_none());
+
+    // A drag across rows selects them; the copy is their full repo-relative paths, the
+    // tree's directories included. The start cell differs from the click above, so the
+    // multi-click window stays out of the way.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 4, files.y);
+    let last = files.y + u16::try_from(rows - 1).unwrap();
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), files.x + 4, last);
+    let text = herdr_reviewr::drag_text(&app, SEL_AREA).unwrap();
+    assert!(text.contains("m.rs"), "paths, not display names: {text}");
+    assert!(text.contains("sub/two.rs"), "the full path, directories included: {text}");
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+
+    // A navigator double-click copies one row's full path alone.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), files.x + 1, files.y);
+    let copied = last_copy().expect("the double copied a path");
+    assert!(!copied.contains('\n'), "one row: {copied}");
+    assert!(!copied.starts_with('/'), "repo-relative, never absolute: {copied}");
+    assert!(app.settled_selection().is_some(), "the navigator copy settles its row highlight");
+}
+
+#[test]
+fn a_world_result_waits_out_an_active_drag() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let rows_before = app.file_rows.len();
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+    assert!(app.gesture_active());
+
+    // A code drag freezes only the open view: the file list keeps updating beneath it,
+    // exactly as composing behaves (specs/text-selection.md).
+    r.write("m.rs", "CHANGED first line\n\tif x {\n日本 z\n");
+    r.write("n.rs", "new file\n");
+    app.reload().unwrap();
+    assert_eq!(app.visible[0].text(), "alpha beta", "the drag freezes the open view");
+    assert!(app.file_rows.len() > rows_before, "the file list updates beneath the drag");
+
+    // The cancelling keypress reloads the held open view.
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+    assert_eq!(app.visible[0].text(), "CHANGED first line");
+}
+
+#[test]
+fn a_navigator_drag_gates_the_world_drain_and_its_end_lifts_the_gate() {
+    let r = selection_repo();
+    r.write("sub/two.rs", "two\n");
+    let mut app = app_on(&r);
+    let files = herdr_reviewr::ui::files_inner_rect(SEL_AREA, &app);
+
+    // The drag anchors to the file rows a snapshot rebuilds: the event loop holds the world
+    // drain, so the completion waits in its channel with nothing stored
+    // (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), files.x + 1, files.y + 1);
+    assert!(app.gesture_active());
+    assert!(app.gates_world_drain(), "a navigator drag holds the world drain");
+    assert!(!app.gates_pr_drain(), "it holds nothing of the PR pipeline");
+
+    // The reflow cancel lifts the gate; the next loop pass drains the queued completion.
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+    assert!(!app.gesture_active());
+    assert!(!app.gates_world_drain());
+
+    // A code drag gates no drain: the lists land beneath it and only the open view holds
+    // (`a_world_result_waits_out_an_active_drag`).
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+    assert!(!app.gates_world_drain());
+    assert!(!app.gates_pr_drain());
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn a_release_lost_past_the_border_still_copies() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+
+    // The overshoot: the drag's last event sits on the pane's own edge — the exit
+    // signature's position half — and the release lands in the next pane, so it never
+    // arrives (specs/text-selection.md).
+    let edge = SEL_AREA.x + SEL_AREA.width - 1;
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), edge, r1);
+    let event = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: edge,
+        row: r1,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert!(
+        herdr_reviewr::pointer_at_pane_edge(event, SEL_AREA),
+        "the pane's edge column is the exit signature"
+    );
+
+    // The exit deadline completes the gesture: the visible selection copies
+    // (TS-NO-SILENT-LOSS), loudly and exactly.
+    herdr_reviewr::complete_gesture(&mut app, SEL_AREA, &SelClipboard);
+    assert!(!app.gesture_active());
+    assert_eq!(app.status, "copied 18 chars", "the lost release still copies");
+    assert_eq!(last_copy().as_deref(), Some("alpha beta\n\tif x {"));
+}
+
+#[test]
+fn a_still_pointer_inside_the_pane_is_a_held_button_not_an_exit() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let content = herdr_reviewr::ui::read_content_rect(SEL_AREA, &app);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+
+    // A release anywhere inside the pane would have arrived — herdr routes by pointer
+    // position — so stillness there proves the button is still down: no exit signature,
+    // even on the read pane's own border row, and the gesture waits for a proof
+    // (specs/text-selection.md).
+    for (col, row) in [(c1, r1), (c0, content.y + content.height)] {
+        let event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(!herdr_reviewr::pointer_at_pane_edge(event, SEL_AREA));
+    }
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn a_press_that_never_moved_dissolves_on_the_deadline_with_nothing() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    let cursor = app.diff_cursor;
+
+    herdr_reviewr::complete_gesture(&mut app, SEL_AREA, &SelClipboard);
+    assert!(!app.gesture_active());
+    assert_eq!(app.status, "", "no selection was visible, so nothing copies");
+    assert_eq!(app.diff_cursor, cursor, "and no click fires");
+}
+
+#[test]
+fn a_lost_gutter_drag_dissolves_without_the_composer() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let gutter_x = inner.x + 1;
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), gutter_x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), gutter_x, inner.y + 2);
+    assert_eq!(app.selection_range(), (0, 2));
+
+    // TS-NO-SILENT-LOSS covers selections only: a lost gutter drag dissolves, and the
+    // composer never opens unasked (specs/text-selection.md).
+    herdr_reviewr::complete_gesture(&mut app, SEL_AREA, &SelClipboard);
+    assert!(!app.gesture_active());
+    assert!(!app.composing(), "the composer opens only on the gutter's own release");
+    assert!(app.select_anchor.is_none(), "the dissolved range clears");
+    assert_eq!(app.status, "");
+}
+
+#[test]
+fn a_press_inside_the_double_click_window_still_drags() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 2); // inside `alpha`
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    app.status.clear();
+    // The second press arms a drag instead of copying its token at the down; the copy waits
+    // for a same-cell release (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    assert!(app.text_drag().is_some(), "the second press arms the drag");
+    assert_eq!(app.status, "", "nothing copies at the down");
+    let (c2, r2) = sel_cell(&app, 2, 2);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c2, r2);
+    assert_eq!(
+        herdr_reviewr::drag_text(&app, SEL_AREA).as_deref(),
+        Some("pha beta\n\tif x {\n日本"),
+        "the dragged-away press is a plain drag selection"
+    );
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn pointer_motion_with_no_button_completes_a_drag_whose_release_was_lost() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+    r.write("m.rs", "CHANGED first line\n\tif x {\n日本 z\n");
+    app.reload().unwrap();
+    assert_eq!(app.visible[0].text(), "alpha beta", "the drag freezes the open view");
+
+    // A `Moved` event proves the button is up and the release was lost: the proof completes
+    // the visible selection's copy (TS-NO-SILENT-LOSS), and the held view catches up
+    // (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Moved, c1, r1);
+    assert!(!app.gesture_active());
+    assert_eq!(app.status, "copied 12 chars", "the proof completes the copy");
+    assert_eq!(last_copy().as_deref(), Some("alpha beta\n\t"));
+    assert_eq!(app.visible[0].text(), "CHANGED first line");
+}
+
+#[test]
+fn the_next_mouse_down_completes_the_old_gesture_then_arms_its_own() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c1, r1) = sel_cell(&app, 1, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c1, r1);
+
+    // A fresh mouse-down proves the old drag's release was lost: the old selection copies,
+    // and the same down then acts fully, arming its own gesture (specs/text-selection.md).
+    let (c2, r2) = sel_cell(&app, 2, 1);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c2, r2);
+    assert_eq!(app.status, "copied 12 chars", "the down completes the old gesture first");
+    let drag = app.text_drag().expect("the same down arms its own gesture");
+    assert_eq!(drag.anchor.row, 2);
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn a_pr_navigator_row_copies_its_full_text_even_when_the_pane_truncates_it() {
+    use herdr_reviewr::app::Tab;
+    use herdr_reviewr::forge::{Comment, PrSnapshot, PrView};
+    use herdr_reviewr::selection::{Gesture, Point, Surface, TextDrag};
+    let r = Repo::init();
+    r.write("x.rs", "y\n");
+    r.commit_all("init");
+    let mut app = app_on(&r);
+    app.set_tab(Tab::Pr).unwrap();
+    let anchor = "a/very/deeply/nested/path/that/no/navigator/pane/could/ever/show/whole.rs:412";
+    app.apply_pr(PrView::Pr(Box::new(PrSnapshot {
+        comments: vec![Comment { anchor: anchor.into(), ..common::comment() }],
+        ..common::pr_snapshot()
+    })));
+
+    // The pane elides the anchor to its width; the copy receives it whole
+    // (specs/text-selection.md Copy).
+    app.gesture = Gesture::Text {
+        drag: TextDrag {
+            surface: Surface::PrNav,
+            anchor: Point { row: 0, chr: 0 },
+            extent: Point { row: 99, chr: 0 },
+        },
+        count: 1,
+    };
+    let text = herdr_reviewr::drag_text(&app, SEL_AREA).unwrap();
+    assert!(text.contains(anchor), "the full anchor copies: {text}");
+    app.gesture = Gesture::None;
+}
+
+#[test]
+fn a_completed_drag_resets_the_multi_click_chain() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 2); // inside `alpha`
+    let (c1, r1) = sel_cell(&app, 1, 3);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c1, r1);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert_eq!(app.status, "copied 10 chars");
+    app.status.clear();
+
+    // The next press on the release cell counts as a first click, not a double: a completed
+    // drag resets the chain (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0);
+    assert!(!app.composing(), "a first click opens no comment box");
+    assert_eq!(app.diff_cursor, 0, "the click acts");
+}
+
+#[test]
+fn a_gutter_gesture_lands_right_with_the_find_band_open() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let gutter_x = inner.x + 1;
+    app.open_find();
+    assert_eq!(app.mode, Mode::Find);
+
+    // The band takes the pane's bottom row; the rows above it keep their gutter mapping.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), gutter_x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), gutter_x, inner.y + 1);
+    assert!(app.gutter_drag());
+    assert_eq!(app.selection_range(), (0, 1));
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), gutter_x, inner.y + 1);
+    assert!(app.composing(), "the gutter release opens the composer under the band's file");
+    // The composer replaced the band: a forced return, so the find highlight cannot keep
+    // painting with no way left to close it (specs/find-in-file.md).
+    assert!(app.find.is_none(), "the gutter release closes the find band");
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn a_preview_drag_selects_and_copies_the_painted_text() {
+    use herdr_reviewr::selection::Surface;
+    let r = Repo::init();
+    r.write("doc.md", "# Title\n\nplain body words\n");
+    r.commit_all("init");
+    r.write("doc.md", "# Title\n\nplain body words changed\n");
+    let mut app = app_on(&r);
+    app.toggle_preview();
+    assert!(app.preview_active());
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+
+    // The rendered heading is line 0; the drag selects its painted text and copies it.
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+    assert_eq!(app.text_drag().map(|d| d.surface), Some(Surface::Painted));
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), inner.x + 40, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x + 40, inner.y);
+    assert_eq!(app.status, "copied 5 chars");
+    assert!(
+        last_copy().is_some_and(|t| t.contains("Title")),
+        "the painted heading text copies: {:?}",
+        last_copy()
+    );
+
+    // A double on the painted surface copies the word under the cell; the preview never
+    // takes a comment (specs/text-selection.md).
+    app.status.clear();
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), inner.x, inner.y);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), inner.x, inner.y);
+    assert!(!app.composing(), "the preview never takes a comment");
+    assert_eq!(app.status, "copied 5 chars");
+    assert_eq!(last_copy().as_deref(), Some("Title"), "the word under the cell copies");
+}
+
+#[test]
+fn a_pr_navigator_drag_gates_the_pr_drains() {
+    use herdr_reviewr::app::Tab;
+    use herdr_reviewr::forge::{Comment, PrSnapshot, PrView};
+    let r = Repo::init();
+    r.write("x.rs", "y\n");
+    r.commit_all("init");
+    let mut app = app_on(&r);
+    app.set_tab(Tab::Pr).unwrap();
+    app.apply_pr(PrView::Pr(Box::new(PrSnapshot {
+        comments: vec![Comment { ..common::comment() }],
+        ..common::pr_snapshot()
+    })));
+
+    // A drag over the `PR` navigator anchors to the fetched result: the event loop holds
+    // both PR drains while it lives, and its end lifts the gate (specs/text-selection.md).
+    let files = herdr_reviewr::ui::files_inner_rect(SEL_AREA, &app);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), files.x + 1, files.y);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), files.x + 1, files.y + 1);
+    assert!(app.gesture_active());
+    assert!(app.gates_pr_drain(), "a PR-navigator drag holds the PR drains");
+    assert!(!app.gates_world_drain(), "and nothing of the world drain");
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+    assert!(!app.gates_pr_drain());
+}
+
+#[test]
+fn the_wheel_during_a_drag_scrolls_and_extends_together() {
+    use std::fmt::Write as _;
+    let r = Repo::init();
+    r.write("base.rs", "fn main() {}\n");
+    r.commit_all("init");
+    let long = (0..60).fold(String::new(), |mut s, i| {
+        let _ = writeln!(s, "line number {i}");
+        s
+    });
+    r.write("tall.rs", &long);
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c0, r0 + 2);
+    let before = app.text_drag().unwrap().extent.row;
+
+    // The wheel scrolls the pane and the same event extends the selection against the
+    // post-scroll rows (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::ScrollDown, c0, r0 + 2);
+    assert_eq!(app.diff_scroll, 3, "the wheel scrolled the drag's pane");
+    let extent = app.text_drag().unwrap().extent.row;
+    assert_eq!(extent, before + 3, "the extent follows the pointer onto the scrolled rows");
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c0, r0 + 2);
+    assert_eq!(app.status, "copied 71 chars");
+}
+
+#[test]
+fn the_hover_cell_survives_a_keypress() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Moved, c0, r0);
+    assert_eq!(app.hover, Some((c0, r0)));
+
+    // The `+` recomputes each frame from the pointer's last reported cell, so a keypress
+    // does not blank it (specs/diff-view.md).
+    press(&mut app, &Keymap::default(), KeyCode::Char('j'));
+    assert_eq!(app.hover, Some((c0, r0)));
+}
+
+#[test]
+fn the_drag_h_scroll_caps_at_the_widest_visible_row() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    app.wrap = false;
+    let content = herdr_reviewr::ui::read_content_rect(SEL_AREA, &app);
+    let widest = herdr_reviewr::ui::widest_visible_row(&app, SEL_AREA);
+    assert!(widest > 0);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+
+    // A drag held past the right edge scrolls, then stops at the widest visible row's last
+    // column — never stranding the view past all content (specs/text-selection.md).
+    for _ in 0..widest {
+        sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), content.x + content.width, r0);
+    }
+    assert_eq!(app.h_scroll, widest - 1, "the cap keeps the widest row's last column");
+
+    // A keyboard scroll already past the cap keeps its place: the cap stops the drag's own
+    // advance, never yanking the view backwards (specs/text-selection.md).
+    app.h_scroll = widest + 20;
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), content.x + content.width, r0);
+    assert_eq!(app.h_scroll, widest + 20);
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
+}
+
+#[test]
+fn the_outermost_row_selects_without_scrolling_and_the_border_scrolls() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    let inner = herdr_reviewr::ui::read_inner_rect(SEL_AREA, &app);
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    // The pane's last inner row selects without scrolling; only the border row and beyond
+    // scroll, so an endpoint can land on the outermost visible line (specs/text-selection.md).
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c0, inner.y + inner.height - 1);
+    assert_eq!(app.diff_scroll, 0, "the last inner row scrolls nothing");
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c0, inner.y + inner.height);
+    assert_eq!(app.diff_scroll, 1, "the border row scrolls");
+    press(&mut app, &Keymap::default(), KeyCode::Esc);
 }

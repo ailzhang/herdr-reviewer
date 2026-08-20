@@ -53,7 +53,7 @@ fn render_size(app: &App, width: u16, height: u16) -> Buffer {
 
 /// Catppuccin surface2 — the shared selection/cursor fill.
 const SELECTION_BG: ratatui::style::Color = ratatui::style::Color::Rgb(0x58, 0x5b, 0x70);
-/// Catppuccin peach — the comment-editor caret block.
+/// Catppuccin orange — the comment-editor caret block.
 const PEACH: ratatui::style::Color = ratatui::style::Color::Rgb(0xfa, 0xb3, 0x87);
 
 /// The right `100-pct`% of every frame row, for pane-scoped assertions — one home for
@@ -1169,17 +1169,17 @@ fn pr_focus_border_tracks_tab_between_navigator_and_read_pane() {
     let read_x = (body.x..body.x + body.width)
         .find(|&x| ui::in_diff_pane(AREA, &app, x, body.y + 4))
         .unwrap();
-    let (lavender, surface2) = (app.palette().lavender, app.palette().surface2);
+    let (blue, surface2) = (app.palette().blue, app.palette().surface2);
 
     let focused_nav = render_buffer(&app);
-    assert_eq!(focused_nav.cell((nav_x, body.y + 4)).unwrap().fg, lavender);
+    assert_eq!(focused_nav.cell((nav_x, body.y + 4)).unwrap().fg, blue);
     assert_eq!(focused_nav.cell((read_x, body.y + 4)).unwrap().fg, surface2);
 
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), AREA, &Keymap::default())
         .unwrap();
     let focused_read = render_buffer(&app);
     assert_eq!(focused_read.cell((nav_x, body.y + 4)).unwrap().fg, surface2);
-    assert_eq!(focused_read.cell((read_x, body.y + 4)).unwrap().fg, lavender);
+    assert_eq!(focused_read.cell((read_x, body.y + 4)).unwrap().fg, blue);
 }
 
 #[test]
@@ -1372,12 +1372,12 @@ fn renders_a_light_theme_without_panic() {
     let mut app = edited_app();
     app.set_cli_theme(Some("catppuccin-latte".to_string()));
     // Driving the full render path with a derived light palette must not panic, and a Latte
-    // color (the focused pane's lavender border) reaches the painted buffer.
+    // color (the focused pane's blue border) reaches the painted buffer.
     let buf = render_buffer(&app);
-    let latte_lavender = herdr_reviewr::theme::resolve(Some("catppuccin-latte")).palette.lavender;
+    let latte_blue = herdr_reviewr::theme::resolve(Some("catppuccin-latte")).palette.blue;
     let painted = (0..40)
         .flat_map(|y| (0..140).map(move |x| (x, y)))
-        .any(|(x, y)| buf.cell((x, y)).is_some_and(|c| c.fg == latte_lavender));
+        .any(|(x, y)| buf.cell((x, y)).is_some_and(|c| c.fg == latte_blue));
     assert!(painted, "the Latte palette reaches the painted buffer");
 }
 
@@ -1641,14 +1641,20 @@ fn pr_nav_clicks_map_the_description_and_comment_rows() {
     }));
 
     // Nav layout: description, blank, checks header, 1 check, blank, comments header,
-    // then the comments. The nav inner starts one row under the tab bar's border.
+    // then the comments. The nav inner starts one row under the tab bar's border. A click
+    // resolves through the display-row map and the row's cursor, the same pair the release
+    // path uses (specs/text-selection.md).
     let area = Rect::new(0, 0, 140, 40);
     let x = 130; // inside the nav pane
-    assert_eq!(ui::pr_nav_hit(area, &app, x, 2), Some(0), "click on the description row");
-    assert_eq!(ui::pr_nav_hit(area, &app, x, 5), None, "a check row is not a cursor stop");
-    assert_eq!(ui::pr_nav_hit(area, &app, x, 8), Some(1), "first comment maps past the offset");
-    assert_eq!(ui::pr_nav_hit(area, &app, x, 9), Some(2), "second comment follows");
-    assert_eq!(ui::pr_nav_hit(area, &app, x, 10), None, "past the last comment is dead");
+    let hit = |app: &App, y: u16| {
+        ui::pr_nav_display_row(area, app, x, y, false)
+            .and_then(|row| ui::pr_nav_cursor_at(app, row))
+    };
+    assert_eq!(hit(&app, 2), Some(0), "click on the description row");
+    assert_eq!(hit(&app, 5), None, "a check row is not a cursor stop");
+    assert_eq!(hit(&app, 8), Some(1), "first comment maps past the offset");
+    assert_eq!(hit(&app, 9), Some(2), "second comment follows");
+    assert_eq!(hit(&app, 10), None, "past the last comment is dead");
 }
 
 #[test]
@@ -1698,6 +1704,7 @@ fn pr_navigator_scroll_is_independent_and_preserved() {
             area,
             &[],
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
     }
@@ -1716,6 +1723,7 @@ fn pr_navigator_scroll_is_independent_and_preserved() {
             area,
             &[],
             &keymap,
+            &herdr_reviewr::export::Clipboard,
         )
         .unwrap();
     }
@@ -1723,6 +1731,9 @@ fn pr_navigator_scroll_is_independent_and_preserved() {
     assert!(scrolled.contains("@author-00"), "the wheel exposes overflowed comments:\n{scrolled}");
     assert_eq!(app.pr_selected_comment().map(|c| c.author.clone()), selected);
 
+    // Click a comment that is not already selected: the click acts at the release
+    // (specs/text-selection.md), so it takes a press and its same-row release.
+    let current = app.pr_selected_comment().map(|c| c.author.clone());
     let (clicked_row, clicked_author) = scrolled
         .lines()
         .enumerate()
@@ -1730,22 +1741,29 @@ fn pr_navigator_scroll_is_independent_and_preserved() {
             comments
                 .iter()
                 .find(|comment| line.contains(&format!("@{}", comment.author)))
+                .filter(|comment| Some(&comment.author) != current.as_ref())
                 .map(|comment| (row as u16, comment.author.clone()))
         })
-        .expect("a scrolled comment row is painted");
-    handle_mouse(
-        &mut app,
-        MouseEvent {
-            kind: MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
-            column: body.x + 2,
-            row: clicked_row,
-            modifiers: KeyModifiers::NONE,
-        },
-        area,
-        &[],
-        &keymap,
-    )
-    .unwrap();
+        .expect("a scrolled, unselected comment row is painted");
+    for kind in [
+        MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        MouseEventKind::Up(ratatui::crossterm::event::MouseButton::Left),
+    ] {
+        handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind,
+                column: body.x + 2,
+                row: clicked_row,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+            &[],
+            &keymap,
+            &herdr_reviewr::export::Clipboard,
+        )
+        .unwrap();
+    }
     assert_eq!(app.pr_selected_comment().map(|c| c.author.as_str()), Some(clicked_author.as_str()));
 
     app.apply_pr(PrView::Pr(Box::new(snapshot())));
@@ -2348,7 +2366,15 @@ mod search_screen_render {
                 row,
                 modifiers: KeyModifiers::NONE,
             };
-            handle_mouse(app, event, AREA, &[], default_keymap()).unwrap();
+            handle_mouse(
+                app,
+                event,
+                AREA,
+                &[],
+                default_keymap(),
+                &herdr_reviewr::export::Clipboard,
+            )
+            .unwrap();
         };
 
         // A click on an unpicked row picks it; a second click opens it (specs/search.md).
@@ -2373,7 +2399,15 @@ mod search_screen_render {
             row: band_y,
             modifiers: KeyModifiers::NONE,
         };
-        handle_mouse(&mut app, event, AREA, &[], default_keymap()).unwrap();
+        handle_mouse(
+            &mut app,
+            event,
+            AREA,
+            &[],
+            default_keymap(),
+            &herdr_reviewr::export::Clipboard,
+        )
+        .unwrap();
         assert_eq!(
             app.search.as_ref().unwrap().search_mode,
             herdr_reviewr::app::SearchMode::Code,
@@ -2998,6 +3032,7 @@ fn a_click_on_a_picker_row_moves_the_highlight_and_misses_stay_inert() {
         area,
         &[],
         &Keymap::default(),
+        &herdr_reviewr::export::Clipboard,
     )
     .unwrap();
     assert_eq!(app.picker_cursor, 2, "a click moves the highlight to the clicked row");
@@ -3038,7 +3073,7 @@ fn the_branch_header_names_the_base_and_its_click_opens_the_picker() {
         modifiers: KeyModifiers::NONE,
     };
     let keymap = app.keymap().clone();
-    handle_mouse(&mut app, click, AREA, &[], &keymap).unwrap();
+    handle_mouse(&mut app, click, AREA, &[], &keymap, &herdr_reviewr::export::Clipboard).unwrap();
     let frame = render(&app);
     assert!(frame.contains("Pick base"), "the click opens the picker popup");
     assert!(frame.contains("dev"), "the sibling branch is a row");
@@ -3388,4 +3423,106 @@ fn an_overlong_skipped_tail_never_evicts_the_base_name() {
     assert!(line0.contains("· feature/x"), "the skipped tail paints in what remains: {line0}");
     assert!(line0.contains('…'), "the tail truncates with a trailing ellipsis: {line0}");
     assert!(line0.contains("1 changed"), "the right-aligned stats survive the long tail: {line0}");
+}
+
+// ---- mouse text selection (specs/text-selection.md, diff-view.md) ----
+
+/// A repo with one uncommitted three-line file, for selection geometry.
+fn selection_app() -> (Repo, App) {
+    let r = Repo::init();
+    r.write("base.rs", "fn main() {}\n");
+    r.commit_all("init");
+    r.write("m.rs", "alpha beta\n\tif x {\n日本 z\n");
+    let app = app_on(&r);
+    (r, app)
+}
+
+#[test]
+fn the_hovered_row_shows_a_plus_in_its_change_bar_cell() {
+    let (_repo, mut app) = selection_app();
+    let area = Rect::new(0, 0, 140, 40);
+    let inner = ui::read_inner_rect(area, &app);
+
+    // No hover: the insertion row paints its change bar.
+    let buf = render_buffer(&app);
+    assert_eq!(buf.cell((inner.x, inner.y)).unwrap().symbol(), "▌");
+
+    // Hovering anywhere on the row puts the `[+]` button over the number field; the
+    // change bar stays, so the diff signal never blinks (specs/diff-view.md).
+    app.hover = Some((inner.x + 8, inner.y));
+    let buf = render_buffer(&app);
+    assert_eq!(buf.cell((inner.x, inner.y)).unwrap().symbol(), "▌");
+    assert_eq!(buf.cell((inner.x + 1, inner.y)).unwrap().symbol(), "[");
+    assert_eq!(buf.cell((inner.x + 2, inner.y)).unwrap().symbol(), "+");
+    assert_eq!(buf.cell((inner.x + 3, inner.y)).unwrap().symbol(), "]");
+    // The unhovered row below keeps its bar and number.
+    assert_eq!(buf.cell((inner.x, inner.y + 1)).unwrap().symbol(), "▌");
+}
+
+#[test]
+fn the_plus_button_right_aligns_in_a_wide_number_field() {
+    // A 1000-line file widens the number field past the 3-column minimum, so the
+    // right-aligned `[+]` leaves blank padding on its left, like the numbers it
+    // replaces (specs/diff-view.md).
+    let r = Repo::init();
+    r.write("base.rs", "fn main() {}\n");
+    r.commit_all("init");
+    let body = (1..=1000).fold(String::new(), |mut s, i| {
+        use std::fmt::Write;
+        let _ = writeln!(s, "line {i}");
+        s
+    });
+    r.write("long.rs", &body);
+    let mut app = app_on(&r);
+    let area = Rect::new(0, 0, 140, 40);
+    let inner = ui::read_inner_rect(area, &app);
+
+    app.hover = Some((inner.x + 8, inner.y));
+    let buf = render_buffer(&app);
+    assert_eq!(buf.cell((inner.x, inner.y)).unwrap().symbol(), "▌");
+    assert_eq!(buf.cell((inner.x + 1, inner.y)).unwrap().symbol(), " ", "left pad, not `[`");
+    assert_eq!(buf.cell((inner.x + 2, inner.y)).unwrap().symbol(), "[");
+    assert_eq!(buf.cell((inner.x + 3, inner.y)).unwrap().symbol(), "+");
+    assert_eq!(buf.cell((inner.x + 4, inner.y)).unwrap().symbol(), "]");
+    // The unhovered row below right-aligns its number in the same field.
+    assert_eq!(buf.cell((inner.x + 4, inner.y + 1)).unwrap().symbol(), "2");
+}
+
+#[test]
+fn the_text_selection_highlights_the_dragged_span() {
+    use herdr_reviewr::selection::{Point, Surface, TextDrag};
+    let (_repo, mut app) = selection_app();
+    let area = Rect::new(0, 0, 140, 40);
+    let inner = ui::read_inner_rect(area, &app);
+    let sel_bg = app.palette().sel_bg;
+    // The selection fill is its own slot, distinct by hue from the cursor fills, so a
+    // selection reads inside a cursor row (specs/theme.md). Park the cursor on the fully
+    // selected middle row so its cells still assert the selection fill won.
+    app.diff_cursor = 1;
+
+    // `beta` on row 0 through char 1 (`本`) of row 2: a three-row stream selection.
+    app.gesture = herdr_reviewr::selection::Gesture::Text {
+        drag: TextDrag {
+            surface: Surface::Read,
+            anchor: Point { row: 0, chr: 6 },
+            extent: Point { row: 2, chr: 1 },
+        },
+        count: 1,
+    };
+    let buf = render_buffer(&app);
+    let bg = |x: u16, y: u16| buf.cell((x, y)).unwrap().style().bg;
+    // The `b` of beta is selected; the chars before the anchor are not — the first row runs
+    // from its start character, not whole (specs/text-selection.md).
+    assert_eq!(bg(inner.x + 5 + 6, inner.y), Some(sel_bg));
+    assert_ne!(bg(inner.x + 5, inner.y), Some(sel_bg));
+    assert_ne!(bg(inner.x + 5 + 5, inner.y), Some(sel_bg));
+    // Row 1 lies whole between the endpoints: tab expansion through its last char.
+    assert_eq!(bg(inner.x + 5, inner.y + 1), Some(sel_bg));
+    assert_eq!(bg(inner.x + 5 + 6, inner.y + 1), Some(sel_bg));
+    // Row 2 runs up to its end character: both wide glyphs (each asserted at its first
+    // cell — the buffer diff skips a wide char's hidden continuation cell), and nothing
+    // past them.
+    assert_eq!(bg(inner.x + 5, inner.y + 2), Some(sel_bg));
+    assert_eq!(bg(inner.x + 5 + 2, inner.y + 2), Some(sel_bg));
+    assert_ne!(bg(inner.x + 5 + 4, inner.y + 2), Some(sel_bg));
 }

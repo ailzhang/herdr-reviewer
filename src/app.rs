@@ -569,6 +569,11 @@ pub struct App {
     /// The link regions painted this frame — a click resolves against the painted
     /// frame (specs/markdown.md).
     painted_links: std::cell::RefCell<Vec<PaintedLink>>,
+    /// The read pane's display-line layout as painted this frame (`ui::read_layout`) — the
+    /// recording every read-pane hit test indexes, so no map can disagree with the screen.
+    /// A mid-event scroll re-runs the walk (`ui::refresh_read_layout`)
+    /// (specs/text-selection.md).
+    painted_slots: std::cell::RefCell<Vec<crate::ui::Slot>>,
     /// The painted markdown body's heading anchors as `(slug, content line index)`,
     /// covering the whole body — an anchor click can jump past the viewport.
     painted_anchors: std::cell::RefCell<Vec<(String, usize)>>,
@@ -587,6 +592,22 @@ pub struct App {
     pub search_pct: u16,
     divider_drag: DividerDrag,
     pub select_anchor: Option<usize>,
+    /// The one live mouse gesture — born at mouse-down, ended by the table in
+    /// specs/text-selection.md ("How a gesture ends").
+    pub gesture: crate::selection::Gesture,
+    /// The settled selection: the last copy's span and its copied text, kept highlighted as
+    /// feedback until the next mouse-down, a keypress, or a refresh that changes the text it
+    /// spans (specs/text-selection.md).
+    settled_sel: Option<(crate::selection::TextDrag, String)>,
+    /// The pointer's last reported cell, recomputed against each frame for the gutter hover
+    /// `+` (specs/diff-view.md).
+    pub hover: Option<(u16, u16)>,
+    /// The multi-click chain: the last mouse-down's time, cell, mapped target row, and count
+    /// within the window (specs/text-selection.md).
+    last_click: Option<(std::time::Instant, u16, u16, usize, u8)>,
+    /// Whether a view-anchored gesture held the open view's reload while snapshots landed
+    /// beneath it, so the gesture's end reloads it once (specs/text-selection.md).
+    view_reload_held: bool,
     pub store: CommentStore,
     pub list_cursor: usize,
     /// The picker's rows, frozen at the moment it opened. A refresh behind it adds, drops,
@@ -752,6 +773,7 @@ impl App {
             preview_scrolled: false,
             pane_width: std::cell::Cell::new(0),
             painted_links: std::cell::RefCell::new(Vec::new()),
+            painted_slots: std::cell::RefCell::new(Vec::new()),
             painted_anchors: std::cell::RefCell::new(Vec::new()),
             pr_read_max_scroll: std::cell::Cell::new(usize::MAX),
             navigator_position: crate::config::NavigatorPosition::Right,
@@ -760,6 +782,11 @@ impl App {
             navigator_hidden: false,
             search_pct: DEFAULT_SEARCH_PCT,
             divider_drag: DividerDrag::Idle,
+            gesture: crate::selection::Gesture::None,
+            settled_sel: None,
+            hover: None,
+            last_click: None,
+            view_reload_held: false,
             select_anchor: None,
             store: CommentStore::new(),
             list_cursor: 0,
@@ -843,6 +870,9 @@ impl App {
             self.cancel_divider_drag();
             self.navigator_position = next_position;
         }
+        // A config layout or theme change also completes a live gesture's copy — that runs at
+        // the observation boundary, where the painted frame is still in reach
+        // (`lib.rs::reconcile_plugin_config`, specs/text-selection.md).
         self.refresh_theme();
     }
 
@@ -857,6 +887,11 @@ impl App {
     /// Block the reviewr pane on one whole-file configuration failure.
     pub fn set_config_error(&mut self, error: String) {
         self.cancel_divider_drag();
+        // The config view replaces the body, ending any gesture over it. The observation
+        // boundary completes a visible selection's copy first
+        // (`lib.rs::reconcile_plugin_config`); this cancel is the backstop for every other
+        // caller, so the blocked pane never holds a live gesture (CFG-BLOCKED-INERT).
+        self.cancel_gesture();
         // The search overlay, the find band, and the agent picker close when the config view
         // takes over; recovery restores the tab beneath them. The query is not restored, and
         // neither are the picker's frozen rows, which would be stale by then (specs/search.md,
@@ -1124,7 +1159,22 @@ impl App {
 
     /// Reconcile a built snapshot into the view — the one place a world result touches place
     /// state, by identity first, then fallback, then clamp (`specs/overview.md` Continuity).
+    /// A navigator drag never reaches here: it gates the world drain itself, so the snapshot
+    /// waits in the completion channel (`lib.rs`, specs/text-selection.md).
     pub fn reconcile_world(&mut self, snapshot: crate::world::WorldSnapshot) {
+        // A content change under the pointer resets the multi-click chain — the clicked
+        // row's own text counts, so a same-length edit under the pointer breaks it too — while
+        // a snapshot that changed nothing on screen leaves a double-click in flight alone
+        // (specs/text-selection.md).
+        let view_before = (self.diff_path.clone(), self.visible.len(), self.clicked_target_text());
+        // The preview's paint is a pure render of `preview_text`, so that string is the
+        // settled highlight's staleness identity there; snapshot it only when a settled
+        // `Painted` span exists to compare for (specs/text-selection.md).
+        let preview_before = self
+            .settled_sel
+            .as_ref()
+            .filter(|(d, _)| matches!(d.surface, crate::selection::Surface::Painted))
+            .map(|_| self.preview_text.clone());
         // Keep the cursor on the same row target across the rebuild; fall back to the open
         // file, then the first file. The toggled-directory set survives untouched.
         let anchor = self.cursor_anchor();
@@ -1144,16 +1194,12 @@ impl App {
         // While a modal is open the diff below it is frozen, so a poll can't shift the anchor
         // beneath the writer, reset the scroll and selection under the overlay, or move the
         // reviewer's place while they choose an agent (`Mode::is_modal`, overview.md Continuity).
-        // The file list still updates above (specs/tui.md).
-        if !self.mode.is_modal() {
-            // A poll keeps the reader on the same file; only a different shown file resets
-            // the diff view to the top. It also drops an armed crossing, which was armed at the
-            // edge of a file that is no longer the one on screen (specs/input.md).
-            if self.shown_entry().map(|e| e.path) != self.diff_path {
-                self.reset_diff_view();
-                self.armed_cross = None;
-            }
-            self.load_read();
+        // A view-anchored drag holds it the same way, catching up when the gesture ends.
+        // The file list still updates above (specs/tui.md, specs/text-selection.md).
+        if self.view_anchored_gesture() {
+            self.view_reload_held = true;
+        } else if !self.mode.is_modal() {
+            self.reload_open_view();
         }
         // A landed poll repaints the search preview in place — never the results, which
         // describe the worktree when their query ran (specs/search.md).
@@ -1164,7 +1210,56 @@ impl App {
         if self.mode == Mode::Find && (open != self.diff_path || !self.find_available()) {
             self.close_find();
         }
+        if view_before != (self.diff_path.clone(), self.visible.len(), self.clicked_target_text()) {
+            self.last_click = None;
+            // The open view's identity changed: whatever the settled highlight spanned is
+            // gone from the screen, whichever surface it was on.
+            self.settled_sel = None;
+        }
+        // The settled highlight follows Continuity: it survives a land that left its text
+        // alone and blanks when the text under it changed — stale never wrong
+        // (specs/text-selection.md). The `PR` surfaces land through the PR paint, and a
+        // card's text is the in-memory comment's, which no poll moves.
+        if let Some((d, text)) = &self.settled_sel {
+            use crate::selection::Surface;
+            let (a, b) = d.ordered();
+            let same = match d.surface {
+                Surface::Read => crate::selection::read_text(&self.visible, a, b) == *text,
+                Surface::Files => {
+                    crate::selection::files_text(&self.file_rows, &self.entries, a.row, b.row)
+                        == *text
+                }
+                // The preview repaints whenever its source changed; the span's own painted
+                // rows are layout-side, so the source string is the comparable identity.
+                Surface::Painted if self.tab != Tab::Pr => {
+                    preview_before.as_deref() == Some(self.preview_text.as_str())
+                }
+                Surface::Painted | Surface::Card { .. } | Surface::PrNav => true,
+            };
+            if !same {
+                self.settled_sel = None;
+            }
+        }
         self.tab_visited = true;
+    }
+
+    /// The text of the visible row the multi-click chain last targeted, for the reconcile
+    /// reset above. A navigator chain compares an unrelated row here, erring toward a reset,
+    /// which only costs a fresh first click.
+    fn clicked_target_text(&self) -> Option<String> {
+        let (_, _, _, target, _) = self.last_click?;
+        Some(self.visible.get(target)?.text())
+    }
+
+    /// Reload the open view against the reconciled list: only a different shown file resets
+    /// the diff view to the top, and it drops an armed crossing, which was armed at the edge
+    /// of a file that is no longer the one on screen (specs/input.md).
+    fn reload_open_view(&mut self) {
+        if self.shown_entry().map(|e| e.path) != self.diff_path {
+            self.reset_diff_view();
+            self.armed_cross = None;
+        }
+        self.load_read();
     }
 
     /// Load the read pane for the active tab: the scope diff in `Changes`, the whole-file
@@ -1596,10 +1691,26 @@ impl App {
         self.pane_width.set(width);
     }
 
-    /// Drop the painted link and anchor regions; the renderer calls this each frame.
-    pub(crate) fn clear_painted_links(&self) {
+    /// Drop the painted frame's recorded regions — the links, the anchors, and the read
+    /// pane's display-line layout; the renderer calls this each frame.
+    pub(crate) fn clear_painted_frame(&self) {
         self.painted_links.borrow_mut().clear();
         self.painted_anchors.borrow_mut().clear();
+        self.painted_slots.borrow_mut().clear();
+    }
+
+    /// Record the read pane's painted display-line layout — the walk the paint performed
+    /// (`ui::read_layout`), which the selection, gutter, and hover hit tests resolve
+    /// against (specs/text-selection.md).
+    pub(crate) fn note_painted_slots(&self, slots: Vec<crate::ui::Slot>) {
+        *self.painted_slots.borrow_mut() = slots;
+    }
+
+    /// The recorded display-line layout of the frame on screen — empty when the last frame
+    /// painted no read-pane rows (a notice, the preview, the `PR` tab).
+    #[must_use]
+    pub(crate) fn painted_slots(&self) -> Vec<crate::ui::Slot> {
+        self.painted_slots.borrow().clone()
     }
 
     /// Note one painted link region, in absolute screen cells.
@@ -1997,8 +2108,25 @@ impl App {
 
     // ---- PR tab (specs/forge-host.md, specs/pr-tab.md) -------------------------------------
 
-    /// Clear a snapshot whose complete fetch input no longer matches the worktree.
+    /// Blank a settled highlight anchored to a `PR` surface: the tab's paint is being
+    /// replaced or emptied, so the span's text is leaving the screen
+    /// (specs/text-selection.md).
+    fn blank_pr_settled(&mut self) {
+        if let Some((d, _)) = &self.settled_sel {
+            use crate::selection::Surface;
+            let on_pr = matches!(d.surface, Surface::PrNav)
+                || (matches!(d.surface, Surface::Painted) && self.tab == Tab::Pr);
+            if on_pr {
+                self.settled_sel = None;
+            }
+        }
+    }
+
+    /// Clear a snapshot whose complete fetch input no longer matches the worktree. A gesture
+    /// over the `PR` tab gates the drains this runs from, so it never fires under a live drag
+    /// (`lib.rs`, specs/text-selection.md).
     pub fn clear_pr(&mut self) {
+        self.blank_pr_settled();
         self.pr = forge::PrView::Pending;
         self.pr_notice = None;
         self.pr_refreshing = false;
@@ -2029,6 +2157,10 @@ impl App {
             return;
         }
         self.pr_notice = None;
+        // The snapshot replaces the painted `PR` surfaces, so a settled highlight on them
+        // would point at replaced text — blank it. The early returns above keep the old
+        // paint, and keep the highlight with it (specs/text-selection.md).
+        self.blank_pr_settled();
         // Follow the selected row by identity, not index, so a refresh that inserts a newer
         // comment (the list is newest-first) keeps the cursor on the same one and leaves the read
         // scroll intact — only a vanished or absent selection resets it (mirrors the file tabs'
@@ -2593,6 +2725,178 @@ impl App {
         }
     }
 
+    /// Whether a mouse text or gutter gesture is live (specs/text-selection.md).
+    #[must_use]
+    pub fn gesture_active(&self) -> bool {
+        !matches!(self.gesture, crate::selection::Gesture::None)
+    }
+
+    /// The live text drag, if any.
+    #[must_use]
+    pub fn text_drag(&self) -> Option<crate::selection::TextDrag> {
+        match self.gesture {
+            crate::selection::Gesture::Text { drag, .. } => Some(drag),
+            _ => None,
+        }
+    }
+
+    /// Whether a gutter comment gesture is live (specs/input.md).
+    #[must_use]
+    pub fn gutter_drag(&self) -> bool {
+        matches!(self.gesture, crate::selection::Gesture::Gutter)
+    }
+
+    /// The settled selection's span, if one is painted (specs/text-selection.md).
+    #[must_use]
+    pub fn settled_selection(&self) -> Option<crate::selection::TextDrag> {
+        self.settled_sel.as_ref().map(|(d, _)| *d)
+    }
+
+    /// Settle a completed copy: the span stays highlighted as feedback, with its copied text
+    /// kept so a refresh can tell stale from wrong (specs/text-selection.md).
+    pub(crate) fn settle_selection(&mut self, drag: crate::selection::TextDrag, text: String) {
+        self.settled_sel = Some((drag, text));
+    }
+
+    /// Clear the settled selection: the user did something else (specs/text-selection.md).
+    pub(crate) fn clear_settled_selection(&mut self) {
+        self.settled_sel = None;
+    }
+
+    /// Whether the live gesture anchors to the open view's rows: a landing snapshot holds
+    /// the view's reload while it lives, exactly as composing does (specs/text-selection.md).
+    fn view_anchored_gesture(&self) -> bool {
+        use crate::selection::Surface;
+        matches!(self.gesture, crate::selection::Gesture::Gutter)
+            || self.text_drag().is_some_and(|d| match d.surface {
+                Surface::Read | Surface::Card { .. } => true,
+                // The preview anchors to the open view's content; the `PR` read pane holds
+                // through the gated PR drains instead.
+                Surface::Painted => self.tab != Tab::Pr,
+                Surface::Files | Surface::PrNav => false,
+            })
+    }
+
+    /// Whether the live gesture anchors to the file navigator's rows, which a snapshot
+    /// rebuilds — the event loop holds the world drain while it lives, so the completion
+    /// waits in its channel (specs/text-selection.md).
+    #[must_use]
+    pub fn gates_world_drain(&self) -> bool {
+        use crate::selection::Surface;
+        // Exhaustive, so a new surface must pick its freeze here rather than silently
+        // landing snapshots under a live gesture.
+        self.text_drag().is_some_and(|d| match d.surface {
+            Surface::Files => true,
+            Surface::Read | Surface::Card { .. } | Surface::Painted | Surface::PrNav => false,
+        })
+    }
+
+    /// Whether the live gesture anchors to the `PR` tab's fetched result — the event loop
+    /// holds the PR drains the same way (specs/text-selection.md).
+    #[must_use]
+    pub fn gates_pr_drain(&self) -> bool {
+        use crate::selection::Surface;
+        self.text_drag().is_some_and(|d| match d.surface {
+            Surface::PrNav => true,
+            Surface::Painted => self.tab == Tab::Pr,
+            Surface::Read | Surface::Card { .. } | Surface::Files => false,
+        })
+    }
+
+    /// End the live gesture without a copy: the reflow-input cancel, and the dissolve of a
+    /// press that never moved or a lost gutter drag. The multi-click chain resets — only a
+    /// gesture's own release continues it — and the freeze lifts (specs/text-selection.md).
+    pub(crate) fn cancel_gesture(&mut self) {
+        if !self.gesture_active() {
+            return; // nothing live: the multi-click chain survives unrelated input
+        }
+        if matches!(self.gesture, crate::selection::Gesture::Gutter) {
+            self.select_anchor = None;
+        }
+        self.gesture = crate::selection::Gesture::None;
+        self.last_click = None;
+        self.lift_gesture_freeze();
+    }
+
+    /// Lift the ended gesture's freeze: the reload a view-anchored gesture held runs now;
+    /// the gated completion channels drain on the event loop's next pass
+    /// (specs/text-selection.md).
+    pub(crate) fn lift_gesture_freeze(&mut self) {
+        // Skip (and drop the bit) when the gesture ended into the composer: the composing
+        // freeze owns the view from here, and its own exit catches up.
+        if std::mem::take(&mut self.view_reload_held) && !self.mode.is_modal() {
+            self.reload_open_view();
+            // The held reload rebuilds the text a just-settled span sits on, so the
+            // highlight could paint over content that was never copied — blank it
+            // (specs/text-selection.md).
+            self.settled_sel = None;
+        }
+    }
+
+    /// Note a mouse-down for the multi-click chain: the count at this cell within the window
+    /// (1 = single, 2 = double, 3 = triple; further clicks within the window stay a triple).
+    /// `target` is the row the cell maps to in its surface, so a scroll that slides new
+    /// content under the pointer breaks the chain rather than double-clicking what the user
+    /// never aimed at (specs/text-selection.md).
+    pub fn note_click(&mut self, col: u16, row: u16, target: usize) -> u8 {
+        const WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
+        let now = std::time::Instant::now();
+        let count = match self.last_click {
+            Some((t, c, r, tgt, n))
+                if c == col && r == row && tgt == target && now.duration_since(t) < WINDOW =>
+            {
+                (n + 1).min(3)
+            }
+            _ => 1,
+        };
+        self.last_click = Some((now, col, row, target, count));
+        count
+    }
+
+    /// Start a gutter comment gesture on `row`: line cursor there, selection cleared, the
+    /// range extended by drag and the composer opened on release (specs/input.md).
+    pub fn start_gutter_drag(&mut self, row: usize) {
+        if self.composing() || row >= self.visible.len() {
+            return; // the gutter is inert while the comment editor is open (specs/input.md)
+        }
+        self.focus = Focus::Diff;
+        self.diff_cursor = row;
+        self.select_anchor = None;
+        self.gesture = crate::selection::Gesture::Gutter;
+        self.reveal_diff = true;
+    }
+
+    /// Finish a gutter gesture at its release: open the composer on the selected line or
+    /// range (specs/input.md).
+    pub fn finish_gutter_drag(&mut self) {
+        if !matches!(self.gesture, crate::selection::Gesture::Gutter) {
+            return;
+        }
+        self.gesture = crate::selection::Gesture::None;
+        // The composer replaces the find band, so a gutter release while finding is a
+        // forced return — without it the band's highlight would keep painting with no way
+        // left to close it (specs/find-in-file.md).
+        self.close_find();
+        self.start_comment();
+        self.lift_gesture_freeze();
+    }
+
+    /// Copy `text` to `target` (the clipboard at runtime, injected like [`Self::export`]):
+    /// `copied N chars` on success, the loud failure status otherwise
+    /// (specs/text-selection.md Copy, herdr-host.md).
+    pub fn copy_selection_text(&mut self, target: &dyn crate::export::ExportTarget, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        match target.export(text) {
+            Ok(()) => self.status = crate::selection::copied_status(text),
+            Err(e) => {
+                crate::logln!("selection copy failed: {e:#}");
+                self.status = target.failure_message();
+            }
+        }
+    }
+
     /// Toggle a range-selection anchor at the current diff line.
     pub fn toggle_select(&mut self) {
         if self.preview_active() {
@@ -2668,9 +2972,11 @@ impl App {
         }
         // Only move the cursor when the open diff is actually the comment's file, so a
         // stale comment (file gone from the changeset) never jumps the cursor onto a
-        // same-numbered line in a different file.
+        // same-numbered line in a different file. Land on the range's LAST row — the row
+        // the card splices under (`card_rows`) — so the edit box opens in the card's
+        // place instead of jumping to the range's first line (specs/input.md).
         if self.diff_path.as_deref() == Some(file.as_str())
-            && let Some(idx) = self.visible.iter().position(|row| {
+            && let Some(idx) = self.visible.iter().rposition(|row| {
                 let no = match side {
                     Side::New => row.new_no(),
                     Side::Old => row.old_no(),
@@ -3039,21 +3345,20 @@ impl App {
             .collect()
     }
 
-    /// For each visible diff row, the store indices of comments whose card renders after it.
-    /// A comment's card sits under the last visible row its line range covers, so the renderer
-    /// can splice it inline (always visible) and the geometry stays anchored to a real row.
-    pub fn comment_cards(&self) -> Vec<Vec<usize>> {
-        let mut cards = vec![Vec::new(); self.visible.len()];
-        let Some(file) = self.diff_path.as_deref() else { return cards };
-        for (ci, c) in self.store.iter().enumerate() {
-            if c.file == file
-                && self.comment_in_view(c)
-                && let Some(last) = self.visible.iter().rposition(|row| line_in(c, row))
-            {
-                cards[last].push(ci);
-            }
-        }
-        cards
+    /// The comment-card anchors as (row, store index) pairs, store-ordered. A comment's card
+    /// sits under the last visible row its line range covers, so the renderer can splice it
+    /// inline (always visible) and the geometry stays anchored to a real row. The one card
+    /// map: the layout walk, the row heights, and the hit tests all read it.
+    pub fn card_rows(&self) -> Vec<(usize, usize)> {
+        let Some(file) = self.diff_path.as_deref() else { return Vec::new() };
+        self.store
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.file == file && self.comment_in_view(c))
+            .filter_map(|(ci, c)| {
+                self.visible.iter().rposition(|row| line_in(c, row)).map(|last| (last, ci))
+            })
+            .collect()
     }
 
     /// The store index to act on: the comment under the diff cursor, or — in the
@@ -4126,6 +4431,30 @@ mod tests {
     use crate::config::NavigatorPosition;
     use crate::model::{Comment, Scope, Side};
     use std::path::PathBuf;
+
+    #[test]
+    fn a_pr_settled_highlight_survives_a_kept_snapshot_and_blanks_on_a_replace() {
+        use crate::selection::{Point, Surface, TextDrag};
+        let mut app = App::new(PathBuf::from("."), Scope::Uncommitted, None);
+        app.apply_pr(crate::forge::PrView::NoPr);
+        let drag = TextDrag {
+            surface: Surface::PrNav,
+            anchor: Point { row: 0, chr: 0 },
+            extent: Point { row: 0, chr: 3 },
+        };
+        app.settle_selection(drag, "text".into());
+
+        // A transient fetch error keeps the painted snapshot, and the highlight with it;
+        // a landed snapshot replaces the paint and blanks it; an emptied tab blanks it
+        // (specs/text-selection.md).
+        app.apply_pr(crate::forge::PrView::Error(crate::git::Forge::GitHub, "offline".into()));
+        assert!(app.settled_selection().is_some(), "a kept paint keeps the highlight");
+        app.apply_pr(crate::forge::PrView::NoPr);
+        assert!(app.settled_selection().is_none(), "a replaced paint blanks the highlight");
+        app.settle_selection(drag, "text".into());
+        app.clear_pr();
+        assert!(app.settled_selection().is_none(), "an emptied tab blanks the highlight");
+    }
 
     #[test]
     fn the_read_pane_scroll_stops_at_the_bottom_edge() {

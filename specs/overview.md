@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-08
+Last edited: 2026-08-18
 ---
 
 # herdr-reviewr
@@ -48,6 +48,7 @@ to move the work forward.
 - Export of all comments to the agent input or the clipboard.
 - Poll-based refresh plus a manual refresh key.
 - Keyboard and mouse input (`input.md`).
+- Mouse text selection over visible text, copied to the clipboard (`text-selection.md`).
 - Full-screen search over the worktree: fuzzy file names and literal code with a live preview, ranking owned by the engine (`search.md`).
 - In-file find in the read pane: literal match highlighting and match-to-match stepping (`find-in-file.md`).
 
@@ -79,7 +80,7 @@ Authored state survives every world event. Only the reviewer removes it (Invaria
 Place state moves only under the reviewer's own input. A world event may only reconcile it, in
 order: match the same target by identity (a path, a comment's author and anchor — never a row
 index), fall back to the nearest surviving target, clamp as the last resort. While the reviewer is
-mid-gesture — composing, dragging a divider, holding a selection — their place is frozen.
+mid-gesture — composing, any active drag, holding a line selection — their place is frozen.
 
 Derived state on screen may be stale, never wrong. A view blanks only when its identity changed —
 a different repository, pull request, or file — never because the same thing gained newer content.
