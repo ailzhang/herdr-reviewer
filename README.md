@@ -28,8 +28,8 @@ One persistent pane, pointed at a git worktree:
 - **Themes** — 18 palettes in dark and light.
 
 It never edits your worktree and sends nothing on its own. Its only git writes are private
-refs under `refs/reviewr/`: the turn baseline and the base pick. The **PR** tab reads GitHub,
-GitLab, or Azure DevOps and never posts.
+refs under `refs/reviewr/`. The **PR** tab reads GitHub, GitLab, or Azure DevOps and never
+posts.
 
 ## Requirements
 
@@ -166,13 +166,11 @@ links, and scroll with the wheel.
 ## The three tabs
 
 - **Changes** — the active scope's changed files with `+/-` stats and totals in the header.
-- **All files** — any file's current content from the whole worktree, comments too. Ignored paths
-  show dimmed, and a wholly-ignored directory (`target/`, `node_modules/`) stays one collapsed row
-  until you expand it.
-- **PR** — a read-only mirror of the branch's pull request (GitHub, Azure DevOps) or merge request
-  (GitLab): state (draft, open, merged, or closed, plus mergeability and sync), checks with a
-  pass/fail rollup, the description, and every comment newest first with `resolved` and `outdated`
-  markers. Bodies render as markdown. reviewr never posts, resolves, re-runs, or merges.
+- **All files** — any file's current content from the whole worktree, comments too. Ignored
+  paths show dimmed.
+- **PR** — a read-only mirror of the branch's pull request (GitHub, Azure DevOps) or merge
+  request (GitLab): state, checks, description, and comments, rendered as markdown. reviewr
+  never writes to the forge.
 
 ## Diff scopes
 
@@ -226,10 +224,8 @@ comment = ["c", "ㅊ"]
 select  = ["v", "ㅍ"]
 ```
 
-A missing file or omitted key uses its default. Any unknown key, wrong type, or invalid value
-makes the whole file invalid. reviewr never applies the valid-looking parts. The pane shows
-the config error until you fix the file, then recovers on its next refresh. Replace the file
-atomically if your editor might expose a partial save.
+A missing file or omitted key uses its default. An invalid file is rejected whole — the pane
+shows the error and recovers on the next refresh after you fix it.
 
 ### Theme
 
@@ -239,8 +235,7 @@ One theme colors the whole UI, chrome and syntax together:
 theme = "tokyo-night"
 ```
 
-`--theme` overrides the file. Match your terminal's light or dark background. The pane keeps it,
-so a mismatched theme reads poorly. Available:
+`--theme` overrides the file. Match your terminal's light or dark background. Available:
 
 - **Dark:** `catppuccin`, `catppuccin-frappe`, `catppuccin-macchiato`, `dracula`, `nord`,
   `gruvbox`, `one-dark`, `solarized`, `monokai`, `tokyo-night`, `rose-pine`.
@@ -259,9 +254,8 @@ The navigator starts on the right. Set `navigator_position` to `right`, `bottom`
 navigator_position = "bottom"
 ```
 
-Side layouts start at 32% of the width (15–60%), stacked at 25% of the height (15–50%), each
-remembered separately for the session. `<` grows, `>` shrinks, or drag the divider. `z` hides
-the navigator altogether and brings it back.
+`<` grows, `>` shrinks, or drag the divider. `z` hides the navigator altogether and brings it
+back.
 
 ### Base branch
 
@@ -272,10 +266,8 @@ When the trunk is something else, or you review a stacked branch, press `B` (or 
 base name) and pick the branch. The pick is stored in the repo, shared by every reviewr pane
 on it, and holds until you pick again. Choosing the default branch clears it.
 
-You can also type a revision the list does not contain. `HEAD~2` and a tag keep that
-spelling and re-resolve like git, so a later commit still diffs one back; the header shows
-`vs HEAD~2 (a1b2c3d)`. A unique SHA prefix completes to the abbreviated SHA. Type a SHA
-(or paste a full object id) to freeze that commit; the header shows `vs a1b2c3d`.
+You can also type any revision — `HEAD~2`, a tag, a SHA prefix. Named spellings re-resolve
+like git, a SHA pins its commit, and the header shows what resolved: `vs HEAD~2 (a1b2c3d)`.
 
 `--base <ref>` sets the base for this pane and takes any rev (a branch, a tag, a SHA,
 `HEAD~1`). It wins over the pick and disables the picker.
@@ -295,9 +287,8 @@ comment = ["c", "ㅊ"]
 select  = ["v", "ㅍ"]
 ```
 
-Several keys per action is there for CJK input sources. The OS sends the composed character,
-so the ASCII shortcut never arrives. Bind the character your layout
-produces on the same physical key.
+Several keys per action serves CJK input sources — bind the character your layout produces
+on the same physical key.
 
 The action names and their defaults:
 
@@ -328,19 +319,15 @@ The action names and their defaults:
 | `refresh` | `r` |
 | `quit` | `q` |
 
-A key is one printable character, or a `ctrl+`/`alt+` chord like `ctrl+f`. The arrows, `Tab`,
-`Esc`, `Enter`, and the page keys are fixed and always work. Keys still type normally in the
-comment box. Two actions can never share a key. A collision invalidates the whole file, and the
-error names both actions. `list-wider` and `list-narrower` stay accepted as aliases for
+A key is one printable character, or a `ctrl+`/`alt+` chord like `ctrl+f`. `Tab`, `Esc`, and
+`Enter` are fixed. Keys still type normally in the comment box. Two actions sharing a key
+invalidates the file. `list-wider` and `list-narrower` stay accepted as aliases for
 `navigator-grow` and `navigator-shrink`.
 
 ### Forge repositories and hosts
 
 A remote named exactly `upstream` with a recognized forge fetch URL wins. Otherwise the PR tab
-reads `origin`. A standard fork clone (fork at `origin`, base repository at `upstream`) works
-without setup. A Git read failure stays visible and never falls through. Both remotes use their
-primary fetch URL after Git's `url.*.insteadOf` rewrite, and a separate push URL does not affect
-PR reads.
+reads `origin`. A standard fork clone works without setup.
 
 GitHub.com, GitLab.com, dev.azure.com, and the `*.visualstudio.com` organization hosts work
 without configuration. For one self-hosted instance per forge, set its bare hostname:
@@ -351,12 +338,10 @@ gitlab_host = "git.corp.example"
 azure_devops_host = "tfs.corp.example"
 ```
 
-Matching is exact, and a hostname belongs to at most one forge. The exception is Azure DevOps'
-`*.visualstudio.com` family, which matches any organization label. reviewr does not infer SSH
-aliases like `github.com-work`. Use a canonical-host remote or an `insteadOf` rewrite.
-`GH_HOST` and `GITLAB_HOST` cannot redirect a PR read, and every `az` call pins its organization.
-Authenticate with `gh auth login --hostname github.example.com`,
-`glab auth login --hostname git.corp.example`, or `az login`.
+Matching is exact. reviewr does not infer SSH aliases like `github.com-work` — use a
+canonical-host remote or an `insteadOf` rewrite. Authenticate with
+`gh auth login --hostname github.example.com`, `glab auth login --hostname git.corp.example`,
+or `az login`.
 
 ### Pane placement
 
@@ -368,14 +353,13 @@ toggle_placement = "overlay"   # split | overlay | zoomed | tab   (default: spli
 toggle_direction = "down"      # right | down — split only        (default: right)
 ```
 
-- **`split`** sits next to your agent and takes the keyboard. `toggle_direction` puts
-  reviewr on the right (default) or below.
-- **`overlay`** covers the tab and takes the keyboard. Toggle again to drop back.
-- **`zoomed`** fills the tab like overlay and takes the keyboard.
-- **`tab`** opens its own tab and takes the keyboard.
+- **`split`** sits next to your agent. `toggle_direction` puts reviewr on the right (default) or below.
+- **`overlay`** covers the tab. Toggle again to drop back.
+- **`zoomed`** fills the tab.
+- **`tab`** opens its own tab.
 
-New worktrees auto-open only `split` and `tab`, and never take the keyboard. `overlay` and `zoomed` wait for your toggle.
-An unrecognized value invalidates the config.
+Every placement takes the keyboard on toggle. New worktrees auto-open only `split` and `tab`,
+and never steal focus.
 
 ### Auto-open and layout plugins
 
@@ -385,10 +369,8 @@ reviewr auto-opens in every new worktree. `auto_open = false` makes it wait for 
 auto_open = false   # default: true
 ```
 
-Set this when another plugin arranges your new worktrees, like
-[herdr-plus](https://github.com/cloudmanic/herdr-plus) layouts. Otherwise both plugins react to
-the same worktree event and race. With auto-open off, the layout builds undisturbed and your
-toggle opens reviewr on top.
+Set this when a layout plugin like [herdr-plus](https://github.com/cloudmanic/herdr-plus)
+arranges your new worktrees, so the two don't race.
 
 A layout places reviewr like any other program. Give one pane the command:
 
@@ -396,12 +378,9 @@ A layout places reviewr like any other program. Give one pane the command:
 command = "herdr-reviewr"
 ```
 
-That pane is a full reviewr pane. It reads your config, sends to agents, tracks turns, and the
-toggle closes it. The install links the binary at `~/.local/bin/herdr-reviewr` when that
-directory exists, and always at
-`~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path if
-`~/.local/bin` is not on your `PATH`. The install creates both links, and every toggle, open,
-or close re-points them at the live plugin — linked dev checkouts included.
+That pane is a full reviewr pane. The install links the binary at `~/.local/bin/herdr-reviewr`
+and at `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path
+if `~/.local/bin` is not on your `PATH`.
 
 A layout hook can also invoke the actions, once its panes are in place:
 
@@ -409,12 +388,8 @@ A layout hook can also invoke the actions, once its panes are in place:
 herdr plugin action invoke open --plugin persiyanov.reviewr
 ```
 
-`open` ignores `auto_open`. An explicit call is you asking. It does nothing when a reviewr pane
-is already open, so a layout can run it on every pass. `close` does nothing when none is open.
-Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`. The action targets the
-focused workspace, so invoke it while the new workspace has focus. Put `herdr-reviewr` itself in
-a layout pane, never the invoke. A pane whose command is the invoke exits when the invoke
-returns.
+`open` ignores `auto_open`, and both actions are safe to repeat. They target the focused
+workspace. Put `herdr-reviewr` itself in a layout pane, never the invoke.
 
 ## Limitations
 
@@ -437,9 +412,8 @@ The known constraints:
 - **Send needs an agent in the workspace** — one agent takes the comments straight away, and
   several open a picker so you choose. With no agent, Send says so and keeps your comments.
 - **last turn relies on polling** (2 s default) — a turn that starts and finishes inside one
-  poll is missed, and the scope shows everything since the last *observed* turn start. It can
-  span more than one turn. A turn belongs to the worktree, so with several agents in one
-  worktree the diff carries all of their work, and your own edits sit in it alongside theirs.
+  poll is missed, and the scope shows everything since the last *observed* turn start, your
+  own edits included.
 
 **PR tab (GitHub, GitLab, and Azure DevOps)**
 - **Read-only** — needs the forge's authenticated CLI (`gh`, `glab`, or `az`) and a
@@ -455,8 +429,8 @@ The known constraints:
 **Review model**
 - **Comments are in-memory and single-session** — closing the pane loses any you haven't sent
   or copied out.
-- **Sending is all-or-nothing** — Send (or copy) delivers the whole set and clears it. No
-  per-comment send, no duplicate delivery, and a failure leaves everything in place.
+- **Sending is all-or-nothing** — Send (or copy) delivers the whole set and clears it. A
+  failure leaves everything in place.
 - **No line-number rebasing** — a comment stays locatable by its diff snippet, not its line
   number. reviewr flags a stale comment instead of dropping it.
 - **Two panes on one worktree drift a little** — they agree on turn boundaries, but each
