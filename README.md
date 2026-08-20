@@ -18,8 +18,8 @@ One persistent pane, pointed at a git worktree:
 
 - **Diff review** — the agent's changed files, syntax-highlighted.
 - **Last-turn diff** — what the worktree's latest turn changed, on its own.
-- **Line comments** — select a range or click the `+` gutter, write a note. One keystroke sends every note to the agent.
-- **Text selection** — drag over any text to copy it, like an editor. Double-click copies a word, triple-click a line, and what you copied stays highlighted.
+- **Line comments** — comment on a line or a range. Then send it to the agent.
+- **Text selection** — drag over any text to copy it, like an editor.
 - **File viewer** — any file's current content from the whole worktree.
 - **Search** — fuzzy file names and live code grep across the worktree, powered by [fff](https://github.com/dmtrKovalenko/fff).
 - **Find in file** — search the open file and step between every match.
