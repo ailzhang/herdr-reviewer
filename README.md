@@ -159,14 +159,9 @@ jumps, and `Ctrl+W` / `Ctrl+U` / `Ctrl+K` deletes.
 | `o` | Open PR in browser |
 | `r` | Refresh |
 
-The mouse works too. Drag over any text to select it and copy it on release, exactly like an
-editor. Double-click a word to copy just that word, triple-click to copy the whole line, or
-double-click a file in the tree to copy its full path. What you copied stays highlighted
-until your next action. Hover a line
-and a `[+]` appears over its line number. Click it to comment that line, or drag along the
-gutter to comment a range. Click files and tabs, and scroll with the
-wheel. A link in rendered markdown opens in your browser (`http`/`https` only), and an anchor
-link jumps to its heading.
+The mouse works too. Drag over any text to select and copy it, double-click a word,
+triple-click a line. Click or drag the line-number gutter to comment. Click files, tabs, and
+links, and scroll with the wheel.
 
 ## The three tabs
 
