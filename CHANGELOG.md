@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-08-20
+
 ### Added
 - **Mouse text selection.** Drag over any text — a diff line, a filename, PR comment text, the
   markdown preview — to select it character by character. Releasing copies the source text to
