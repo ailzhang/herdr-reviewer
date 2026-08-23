@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-18
+Last edited: 2026-08-21
 ---
 
 # herdr host
@@ -55,7 +55,7 @@ With valid plugin config:
 | what counts as open?    | any reviewr pane in the workspace (Pane identity)                         |
 | which workspace?        | the focused one, wherever the action is invoked from                      |
 
-Every action validates plugin config before inspecting the workspace (`config.md`). An action refuses without workspace context, and an open refuses outside a git repository. Both land in `herdr plugin log list`.
+Every action validates plugin config before inspecting the workspace (`config.md`). An action refuses without workspace context, and an open refuses outside a git or Sapling repository. Both land in `herdr plugin log list`.
 
 ## Pane placement
 
@@ -89,9 +89,9 @@ A `tab` open names the fresh tab `reviewr`, using the `tab_id` the pane-open res
 
 ## Repo discovery
 
-The binary reviews its own pane's working directory, normalized to its git top level. A directory outside any repository shows an empty state.
+The binary reviews its own pane's working directory, normalized to its top level — git first, then Sapling (`sapling.md`). A directory outside any repository shows an empty state.
 
-A manual open prefers the focused pane's live foreground directory over its recorded launch directory. Launch a `claude -w <worktree>` pane from the main checkout, and the open reviews the worktree. A live directory outside any git repository falls back to the launch directory. A failed or empty live read falls back the same way. The open refuses only when no candidate directory is inside a git repository. The refusal names every directory it rejected. The event open takes its directory from the event payload. It reads no pane.
+A manual open prefers the focused pane's live foreground directory over its recorded launch directory. Launch a `claude -w <worktree>` pane from the main checkout, and the open reviews the worktree. A live directory outside any git or Sapling repository falls back to the launch directory. A failed or empty live read falls back the same way. The open refuses only when no candidate directory is inside a git or Sapling repository. The refusal names every directory it rejected. The event open takes its directory from the event payload. It reads no pane.
 
 ## Sending to the agent
 
@@ -143,7 +143,7 @@ A configuration error closes the picker and drops its frozen rows. Every comment
 
 Two agents editing one worktree produce one turn (→ HH-TURN-PER-WORKTREE), so a second agent starting mid-turn never re-baselines the first one's work out of the diff.
 
-An agent is in the worktree when its working directory resolves to the reviewr pane's git top level. Only another pane carrying an `agent` field counts. A second worktree of the same repository resolves elsewhere and is not in it. herdr workspaces and tabs never enter this rule, so placement never changes which turns the pane sees, and a plain clone tracks like a herdr worktree.
+An agent is in the worktree when its working directory resolves to the reviewr pane's top level, through the pane's own VCS (`sapling.md`). Only another pane carrying an `agent` field counts. A second worktree of the same repository resolves elsewhere and is not in it. herdr workspaces and tabs never enter this rule, so placement never changes which turns the pane sees, and a plain clone tracks like a herdr worktree.
 
 reviewr polls the agents in the worktree on every worktree refresh:
 

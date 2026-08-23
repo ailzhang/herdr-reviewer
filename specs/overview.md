@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-18
+Last edited: 2026-08-21
 ---
 
 # herdr-reviewr
@@ -10,7 +10,7 @@ A terminal review pane for herdr: browse a coding agent's changes, comment on li
 
 ## Overview
 
-One binary (`herdr-reviewr`, Rust + ratatui) runs in a herdr pane, pointed at one git worktree. It renders in the real terminal, so fonts and colors are whatever the user already runs.
+One binary (`herdr-reviewr`, Rust + ratatui) runs in a herdr pane, pointed at one git or Sapling worktree (`sapling.md`). It renders in the real terminal, so fonts and colors are whatever the user already runs.
 
 The reviewer's loop:
 
@@ -90,7 +90,7 @@ Newer content paints over the old in place, reconciling the reviewer's place as 
 
 | Always true                                                                                                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| reviewr never commits, stages, or mutates the worktree, the index, or any branch. Its only git writes are private refs under `refs/reviewr/`: the turn baseline and the base pick.  |
+| reviewr never commits, stages, or mutates the worktree, the index, or any branch. Its only git writes are private refs under `refs/reviewr/`: the turn baseline and the base pick. In a Sapling repository it writes nothing inside the repository at all (`sapling.md` SL-NO-REPO-WRITES).  |
 | reviewr never writes to a forge. It reads the pull request through the forge's official CLI and opens links in the browser, nothing more.                   |
 | A comment, saved or being typed, is never lost to a refresh or the agent's edits. Only the reviewer removes it, and only an explicit export takes it out.   |
 
@@ -107,3 +107,4 @@ Newer content paints over the old in place, reconciling the reviewer's place as 
 - [pr-tab](./pr-tab.md)
 - [herdr-host](./herdr-host.md)
 - [forge-host](./forge-host.md)
+- [sapling](./sapling.md)

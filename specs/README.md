@@ -42,6 +42,7 @@ Each concern lives in the one doc that owns it. A change is woven into that doc,
 - `herdr-host.md` (`HH`) — owns running as a herdr pane, the export target, and roadmap integration.
 - `forge-host.md` (`FH`) — owns reading the pull request from the repository's forge: resolution, state, checks, comments, and failure states.
 - `forge-providers.md` (`FP`) — owns the per-forge contracts: identity, the CLI and its remedies, and each forge's snapshot mapping.
+- `sapling.md` (`SL`) — owns reviewing a Sapling worktree: detection, the snapshot store, scope sources, and the disabled surfaces.
 
 ## The bar
 

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-19
+Last edited: 2026-08-21
 ---
 
 # Review model
@@ -36,6 +36,8 @@ A scope selects which changes `Changes` shows and which files `All files` annota
 | `uncommitted` | staged and unstaged changes vs `HEAD`, plus untracked files   |
 | `branch`      | everything the branch carries over its base, committed or not |
 | `last-turn`   | every change in the worktree's last change-producing turn     |
+
+In a Sapling repository the scope and base sources adapt; `sapling.md` owns those deltas.
 
 ### Base branch
 
