@@ -1034,8 +1034,9 @@ pub fn read_base_pick(repo: &Path) -> Result<Option<String>, GitFail> {
 }
 
 /// One printable line, not a git option (`specs/review-model.md`). `HEAD~1` and a tag are
-/// picks. Control bytes are not.
-fn pick_spelling_shaped(value: &str) -> bool {
+/// picks. Control bytes are not. Shared with the Sapling pick store, so the two backends
+/// cannot disagree on what a recorded spelling is.
+pub(crate) fn pick_spelling_shaped(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('-')
         && value.bytes().all(|byte| byte > b' ' && byte != 0x7f)

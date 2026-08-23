@@ -733,7 +733,7 @@ fn a_refusal_names_the_rejected_live_cwd_too() {
 
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not a git repo"), "{stderr}");
+    assert!(stderr.contains("not a git or sl repo"), "{stderr}");
     assert!(
         stderr.contains(dir.path().to_str().unwrap()),
         "the refusal must name the rejected live cwd: {stderr}"

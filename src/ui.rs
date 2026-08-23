@@ -1486,6 +1486,11 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.file_rows.is_empty() {
         let msg = match app.tab {
+            // Listing a Sapling worktree would enumerate a monorepo
+            // (`specs/sapling.md` Disabled surfaces).
+            Tab::AllFiles if app.vcs == crate::vcs::VcsKind::Sapling => {
+                "All files needs a git repository"
+            }
             Tab::AllFiles => "no files",
             Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => "no changes",
@@ -4262,6 +4267,9 @@ fn pr_empty_msg(
         forge::PrView::NeedsForgeRemote => {
             "The PR tab needs a GitHub, GitLab, or Azure DevOps remote named upstream or origin."
                 .into()
+        }
+        forge::PrView::NotGit => {
+            "Pull requests live on a git forge. This worktree is Sapling.".into()
         }
         forge::PrView::UnsupportedHost(host) => {
             format!(

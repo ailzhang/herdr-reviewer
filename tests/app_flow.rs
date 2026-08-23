@@ -2384,7 +2384,10 @@ fn observe_agents(
 /// `/private/var`, and no agent cwd would ever match.
 fn turn_setup(r: &Repo) -> (App, herdr_reviewr::world::TurnHost) {
     let root = herdr_reviewr::git::toplevel(r.path()).expect("a repo");
-    (App::new(root.clone(), Scope::LastTurn, None), herdr_reviewr::world::TurnHost::open(root))
+    (
+        App::new(root.clone(), Scope::LastTurn, None),
+        herdr_reviewr::world::TurnHost::open(root, herdr_reviewr::vcs::VcsKind::Git),
+    )
 }
 
 /// The single-agent case the older tests drive: one agent at the worktree root.
@@ -4319,7 +4322,11 @@ fn the_worker_coalesces_queued_jobs_keeping_their_flags() {
     job_tx
         .send(WorldJob { generation: 2, input: newer, sample_turn: false, reveal: true })
         .unwrap();
-    let worker = world::spawn(TurnHost::open(dir.path().to_path_buf()), job_rx, res_tx);
+    let worker = world::spawn(
+        TurnHost::open(dir.path().to_path_buf(), herdr_reviewr::vcs::VcsKind::Git),
+        job_rx,
+        res_tx,
+    );
     let completion = res_rx.recv().expect("one coalesced completion");
     assert_eq!(completion.generation, 2, "the latest request wins");
     assert_eq!(completion.input.scope, Scope::Branch, "the newest input is the one built");

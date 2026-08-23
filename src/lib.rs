@@ -28,10 +28,12 @@ pub mod model;
 pub mod proc;
 pub mod search;
 pub mod selection;
+pub mod sl;
 pub mod snippet;
 pub mod theme;
 pub mod turn;
 pub mod ui;
+pub mod vcs;
 pub mod world;
 
 use std::io;
@@ -152,15 +154,15 @@ fn restore_terminal(kbd: bool) {
     ratatui::restore();
 }
 
-/// The reviewed repository, resolved to its git top level. Every `App` goes through this,
-/// blocked or ready, so the app and the worker's `TurnHost` hold the same spelling: they key
-/// the baseline ref off it independently, and turn membership compares resolved top levels
-/// against it (`specs/herdr-host.md`).
+/// The reviewed repository, resolved to its top level — git first, then Sapling
+/// (`specs/sapling.md`). Every `App` goes through this, blocked or ready, so the app and the
+/// worker's `TurnHost` hold the same spelling: they key the baseline off it independently, and
+/// turn membership compares resolved top levels against it (`specs/herdr-host.md`).
 ///
 /// A non-repo path is not an error — the pane opens to an empty state and starts showing
 /// changes if the directory becomes a repo.
 fn repo_root(cfg: &Config) -> std::path::PathBuf {
-    git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
+    crate::vcs::resolve_repo(&cfg.repo).0
 }
 
 /// The startup app for one config snapshot: ready on `Ok`, blocked with the error on
@@ -710,7 +712,7 @@ fn event_loop(
     let (world_tx, world_job_rx) = mpsc::channel::<crate::world::WorldJob>();
     let (world_res_tx, world_rx) = mpsc::channel::<crate::world::WorldCompletion>();
     let _world_worker = crate::world::spawn(
-        crate::world::TurnHost::open(app.repo.clone()),
+        crate::world::TurnHost::open(app.repo.clone(), app.vcs),
         world_job_rx,
         world_res_tx,
     );
@@ -951,7 +953,11 @@ fn event_loop(
             // before it can paint, while the generation still coalesces repeated triggers into
             // one fresh fetch. Ambient triggers ride in-flight work and arm a trailing fetch
             // (`request_refresh`).
-            let fallback_poll = app.tab == crate::app::Tab::Pr && last_pr_poll.elapsed() >= PR_POLL;
+            // A Sapling pane's PR state is static: no fallback poll, and `pr_pending`
+            // never queues (`specs/sapling.md` Disabled surfaces).
+            let fallback_poll = app.vcs == crate::vcs::VcsKind::Git
+                && app.tab == crate::app::Tab::Pr
+                && last_pr_poll.elapsed() >= PR_POLL;
             let refresh =
                 app.pr_pending.take().or(fallback_poll.then_some(crate::app::RefreshKind::Ambient));
             if let Some(kind) = refresh {
@@ -1020,7 +1026,9 @@ fn event_loop(
                 }
             }
 
-            if pr.can_start_probe(app.plugin_config().is_some()) {
+            if app.vcs == crate::vcs::VcsKind::Git
+                && pr.can_start_probe(app.plugin_config().is_some())
+            {
                 pr.probe_pending = false;
                 let (tx, repo, base, plugin_config, epoch) = (
                     probe_tx.clone(),

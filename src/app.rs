@@ -479,6 +479,9 @@ pub enum Band {
 #[derive(Debug)]
 pub struct App {
     pub repo: PathBuf,
+    /// The repository's VCS kind, fixed at construction (`specs/sapling.md`). Every
+    /// repository read dispatches on it, and the Sapling-disabled surfaces gate on it.
+    pub vcs: crate::vcs::VcsKind,
     pub base: Option<String>,
     /// The `branch` scope's base outcome, carried by the latest landed snapshot — the
     /// header names its winner (or the skip) and the diff builds against the winner's OID
@@ -733,13 +736,15 @@ impl App {
     }
 
     fn build(repo: PathBuf, scope: Scope, base: Option<String>, load_turn: bool) -> Self {
+        let vcs = crate::vcs::kind_at(&repo);
         // Mirror any persisted turn baseline for this worktree, so `last-turn` keeps its
         // anchor across a reviewr pane restart. The worker's `TurnHost` owns the tracker; this
         // mirror follows its completions (specs/herdr-host.md).
-        let turn_baseline = if load_turn { crate::world::seed_baseline(&repo) } else { None };
+        let turn_baseline = if load_turn { crate::world::seed_baseline(vcs, &repo) } else { None };
         let theme = theme::resolve(None);
         Self {
             repo,
+            vcs,
             base,
             branch_base: git::BaseStatus::default(),
             base_epoch: 0,
@@ -801,7 +806,12 @@ impl App {
             status: String::new(),
             keys_expanded: false,
             should_quit: false,
-            pr: forge::PrView::Pending,
+            // A Sapling pane opens on the static no-forge state instead of a pending
+            // fetch that will never run (`specs/sapling.md` Disabled surfaces).
+            pr: match vcs {
+                crate::vcs::VcsKind::Git => forge::PrView::Pending,
+                crate::vcs::VcsKind::Sapling => forge::PrView::NotGit,
+            },
             pr_forge: crate::git::Forge::GitHub,
             pr_notice: None,
             pr_refreshing: false,
@@ -1107,8 +1117,8 @@ impl App {
         if !self.tab.is_file_tab() {
             return Ok(());
         }
-        // Outside a git repo, show an empty state rather than failing (herdr-host.md).
-        if !git::is_repo(&self.repo) {
+        // Outside a repo, show an empty state rather than failing (herdr-host.md).
+        if !crate::vcs::is_repo(self.vcs, &self.repo) {
             self.entries.clear();
             self.changed.clear();
             self.file_rows.clear();
@@ -1132,6 +1142,7 @@ impl App {
     pub fn world_input(&self) -> crate::world::WorldInput {
         crate::world::WorldInput {
             repo: self.repo.clone(),
+            vcs: self.vcs,
             tab: self.tab,
             scope: self.scope,
             base: self.base.clone(),
@@ -1423,15 +1434,17 @@ impl App {
         // bottom half: leave diff_scroll — the content above the fold stays put, grow downward
     }
 
-    /// The old and new content of `file` for the current scope: old from `HEAD` (or the
-    /// merge-base on the branch scope), new from the worktree. A rename reads its old side
-    /// from `previous_path`, so the diff shows real edits, not a wholesale delete-and-add.
+    /// The old and new content of `file` for the current scope: old from the scope's base
+    /// revision (`HEAD`, the working-copy parent, the merge-base, or the turn baseline), new
+    /// from the worktree. A rename reads its old side from `previous_path`, so the diff shows
+    /// real edits, not a wholesale delete-and-add.
     fn content_sides(&self, path: &str, previous_path: Option<&str>) -> (String, String) {
         let new_path = path;
         let old_path = previous_path.unwrap_or(new_path);
         match self.scope {
             Scope::Uncommitted => {
-                let old = git::file_content(&self.repo, "HEAD", old_path);
+                let base = crate::vcs::uncommitted_base(self.vcs);
+                let old = crate::vcs::file_content(self.vcs, &self.repo, base, old_path);
                 let new = worktree_content(&self.repo, new_path);
                 (old, new)
             }
@@ -1440,16 +1453,17 @@ impl App {
                     .branch_base
                     .winner
                     .as_ref()
-                    .and_then(|b| git::merge_base(&self.repo, b.oid()));
-                let old =
-                    mb.map(|m| git::file_content(&self.repo, &m, old_path)).unwrap_or_default();
+                    .and_then(|b| crate::vcs::merge_base(self.vcs, &self.repo, b.oid()));
+                let old = mb
+                    .map(|m| crate::vcs::file_content(self.vcs, &self.repo, &m, old_path))
+                    .unwrap_or_default();
                 (old, worktree_content(&self.repo, new_path))
             }
             Scope::LastTurn => {
                 let old = self
                     .turn_baseline
                     .as_deref()
-                    .map(|b| git::file_content(&self.repo, b, old_path))
+                    .map(|b| crate::vcs::file_content(self.vcs, &self.repo, b, old_path))
                     .unwrap_or_default();
                 (old, worktree_content(&self.repo, new_path))
             }
@@ -2047,7 +2061,12 @@ impl App {
 
     /// Queue a PR refresh, merging into any request already pending: the stronger kind
     /// wins, so an ambient trigger can never downgrade the user's commanded refresh.
+    /// A Sapling pane's PR state is static, so no request ever queues
+    /// (`specs/sapling.md` Disabled surfaces).
     pub fn request_pr_refresh(&mut self, kind: RefreshKind) {
+        if self.vcs == crate::vcs::VcsKind::Sapling {
+            return;
+        }
         self.pr_pending = self.pr_pending.max(Some(kind));
     }
 
@@ -3090,14 +3109,15 @@ impl App {
             return;
         }
         let query = bp.query.clone();
-        let hit = git::resolve_spelling(&self.repo, &query).map(|resolved| {
+        let hit = crate::vcs::resolve_spelling(self.vcs, &self.repo, &query).map(|resolved| {
             resolved.map(|c| match c {
                 git::ResolvedBase::Branch { name, .. } => {
                     BaseChoice::Branch { name, starred: false, is_default: false }
                 }
-                git::ResolvedBase::Rev { spelling, oid } => {
-                    BaseChoice::Rev { name: git::complete_sha_prefix(&spelling, &oid), oid }
-                }
+                git::ResolvedBase::Rev { spelling, oid } => BaseChoice::Rev {
+                    name: crate::vcs::complete_pick_spelling(self.vcs, &spelling, &oid),
+                    oid,
+                },
             })
         });
         let Some(bp) = self.base_picker.as_mut() else { return };
@@ -3428,6 +3448,12 @@ impl App {
 
     /// `/`: open the search screen, from any tab, from either pane (specs/search.md).
     pub fn open_search(&mut self) {
+        // The search engine walks and content-indexes the whole worktree, which a
+        // Sapling monorepo forbids (`specs/sapling.md` SL-SCALE-CHANGED).
+        if self.vcs == crate::vcs::VcsKind::Sapling {
+            self.status = "search needs a git repository".to_string();
+            return;
+        }
         // A navigator-divider drag held from the review view must not become a search-split
         // resize: cancel it so its remaining drag events are consumed, not acted on — the
         // search divider only drags a gesture it started itself (specs/input.md).
@@ -4091,8 +4117,8 @@ impl App {
         if !self.base_pick_available() || self.mode != Mode::Normal {
             return;
         }
-        let default = git::default_branch_name(&self.repo).ok().flatten();
-        let names = match git::list_branches(&self.repo, default.as_deref()) {
+        let default = crate::vcs::default_branch_name(self.vcs, &self.repo).ok().flatten();
+        let names = match crate::vcs::list_branches(self.vcs, &self.repo, default.as_deref()) {
             Ok(names) => names,
             Err(e) => {
                 self.status = e.0;
@@ -4175,9 +4201,9 @@ impl App {
         let Some(choice) = choice else { return Ok(()) };
         self.close_base_picker();
         let write = if choice.is_default() {
-            git::clear_base_pick(&self.repo)
+            crate::vcs::clear_base_pick(self.vcs, &self.repo)
         } else {
-            git::write_base_pick(&self.repo, choice.name())
+            crate::vcs::write_base_pick(self.vcs, &self.repo, choice.name())
         };
         if let Err(e) = write {
             self.status = e.0;

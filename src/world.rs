@@ -23,6 +23,9 @@ use crate::turn::{TurnTracker, WorktreeState};
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WorldInput {
     pub repo: PathBuf,
+    /// The pane's VCS kind, fixed at open (`specs/sapling.md`). Rides the input so the
+    /// worker and the synchronous builds dispatch identically.
+    pub vcs: crate::vcs::VcsKind,
     pub tab: Tab,
     pub scope: Scope,
     /// The `--base` flag, resolved fresh per build. The pick is read from its ref at build
@@ -55,9 +58,9 @@ pub struct WorldSnapshot {
 /// worktree. In `last-turn` with no baseline yet, the changeset is empty until a turn
 /// start is observed (specs/review-model.md).
 pub fn build(input: &WorldInput) -> Result<WorldSnapshot> {
-    // Outside a git repo, an empty snapshot paints the quiet empty state rather than a
+    // Outside a repo, an empty snapshot paints the quiet empty state rather than a
     // failing status line every poll (specs/herdr-host.md).
-    if !git::is_repo(&input.repo) {
+    if !crate::vcs::is_repo(input.vcs, &input.repo) {
         return Ok(WorldSnapshot {
             changed: HashMap::new(),
             entries: Vec::new(),
@@ -80,25 +83,32 @@ pub fn build(input: &WorldInput) -> Result<WorldSnapshot> {
 /// wear another scope's label (specs/tui.md).
 pub fn build_changed(input: &WorldInput) -> Result<(git::BaseStatus, Vec<ChangedFile>)> {
     let none = git::BaseStatus::default;
-    if !git::is_repo(&input.repo) {
+    if !crate::vcs::is_repo(input.vcs, &input.repo) {
         return Ok((none(), Vec::new()));
     }
     match input.scope {
         Scope::LastTurn => match input.turn_baseline.as_deref() {
-            Some(t) => Ok((none(), git::changed_against_tree(&input.repo, t)?)),
+            Some(t) => Ok((none(), crate::vcs::changed_against_tree(input.vcs, &input.repo, t)?)),
             None => Ok((none(), Vec::new())),
         },
-        Scope::Uncommitted => Ok((none(), git::changed_files(&input.repo, input.scope, None)?)),
+        Scope::Uncommitted => {
+            Ok((none(), crate::vcs::changed_files(input.vcs, &input.repo, input.scope, None)?))
+        }
         Scope::Branch => {
             // A resolve failure fails the build whole, so the landing keeps the stale
             // frame and reports — degrading to an empty snapshot would blank a populated
             // view over a transient error (specs/overview.md Continuity). A chain where
             // nothing resolves is not a failure: it returns the legible no-base state.
-            let resolution = git::resolve_base(&input.repo, input.base.as_deref())
+            let status = crate::vcs::resolve_base(input.vcs, &input.repo, input.base.as_deref())
                 .map_err(|e| anyhow::anyhow!("{}", e.0))?;
-            let base_oid = resolution.status.winner.as_ref().map(|w| w.oid().to_string());
-            let changed = git::changed_files(&input.repo, input.scope, base_oid.as_deref())?;
-            Ok((resolution.status, changed))
+            let base_oid = status.winner.as_ref().map(|w| w.oid().to_string());
+            let changed = crate::vcs::changed_files(
+                input.vcs,
+                &input.repo,
+                input.scope,
+                base_oid.as_deref(),
+            )?;
+            Ok((status, changed))
         }
     }
 }
@@ -111,8 +121,8 @@ pub fn annotate(changed: &[ChangedFile]) -> HashMap<String, Annotation> {
 
 /// The persisted turn baseline for `repo`, if any — the one seeding rule, shared by the
 /// worker's tracker and the app's first-frame mirror (specs/herdr-host.md).
-pub fn seed_baseline(repo: &std::path::Path) -> Option<String> {
-    git::read_baseline_ref(repo, &git::worktree_key(repo))
+pub fn seed_baseline(vcs: crate::vcs::VcsKind, repo: &std::path::Path) -> Option<String> {
+    crate::vcs::seed_baseline(vcs, repo)
 }
 
 /// The `All files` entries: every worktree path (ignored dimmed), with the children of
@@ -129,7 +139,8 @@ pub(crate) fn all_files_entries(
         ignored: w.ignored,
         is_dir: w.is_dir,
     };
-    let mut entries: Vec<Entry> = git::all_files(&input.repo)?.into_iter().map(&to_entry).collect();
+    let mut entries: Vec<Entry> =
+        crate::vcs::all_files(input.vcs, &input.repo)?.into_iter().map(&to_entry).collect();
     let mut i = 0;
     while i < entries.len() {
         if entries[i].is_dir && input.toggled_dirs.contains(&entries[i].path) {
@@ -149,7 +160,12 @@ pub(crate) fn all_files_entries(
 pub struct TurnHost {
     tracker: TurnTracker,
     repo: PathBuf,
+    vcs: crate::vcs::VcsKind,
     turn_key: String,
+    /// The snapshot backend: git's temp-index tree write, or the Sapling snapshot
+    /// store, which must hold a pinned candidate's bytes in memory until promotion
+    /// (`specs/sapling.md` The snapshot store).
+    snapshots: Snapshots,
     /// Each agent `cwd` resolved to whether it is a member of the reviewed worktree. Only a
     /// resolved git top level is recorded, since a worktree root does not move, so a member is
     /// placed once and never re-queried. A cwd git reports outside every worktree is not cached:
@@ -157,6 +173,14 @@ pub struct TurnHost {
     /// run for is not cached either, and holds the poll rather than counting the agent out, so a
     /// transient failure never poisons a member for the session (specs/herdr-host.md).
     resolved: HashMap<String, bool>,
+}
+
+/// The per-kind snapshot backend `TurnHost` dispatches on. The store is boxed so the
+/// git arm does not carry its size.
+#[derive(Debug)]
+enum Snapshots {
+    Git,
+    Sapling(Box<crate::sl::TurnStore>),
 }
 
 /// One sample's outcome, sent back with the completion: whether it ended a turn (the `PR`
@@ -213,10 +237,41 @@ impl TurnHost {
     /// membership both compare against it and `App` derives the same baseline-ref key from
     /// its own copy — normalizing here instead would key the two apart. `run` resolves it
     /// once for both (`src/lib.rs`).
-    pub fn open(repo: PathBuf) -> Self {
-        let tracker = TurnTracker::with_baseline(seed_baseline(&repo));
+    pub fn open(repo: PathBuf, vcs: crate::vcs::VcsKind) -> Self {
+        let tracker = TurnTracker::with_baseline(seed_baseline(vcs, &repo));
         let turn_key = git::worktree_key(&repo);
-        Self { tracker, repo, turn_key, resolved: HashMap::new() }
+        let snapshots = match vcs {
+            crate::vcs::VcsKind::Git => Snapshots::Git,
+            crate::vcs::VcsKind::Sapling => {
+                Snapshots::Sapling(Box::new(crate::sl::TurnStore::open(repo.clone())))
+            }
+        };
+        Self { tracker, repo, vcs, turn_key, snapshots, resolved: HashMap::new() }
+    }
+
+    /// Snapshot the worktree under the pane's kind.
+    fn snapshot(&mut self) -> Result<String> {
+        match &mut self.snapshots {
+            Snapshots::Git => git::snapshot_worktree(&self.repo),
+            Snapshots::Sapling(store) => store.snapshot(),
+        }
+    }
+
+    /// Pin a turn-start snapshot so later polls cannot evict its bytes — a git tree
+    /// lives in the object database already, so only the Sapling store acts.
+    fn pin_candidate(&mut self, id: &str) {
+        if let Snapshots::Sapling(store) = &mut self.snapshots {
+            store.pin_candidate(id);
+        }
+    }
+
+    /// Persist the promoted baseline: the private ref, or the snapshot store
+    /// (`specs/sapling.md` SL-NO-REPO-WRITES).
+    fn persist_baseline(&mut self, id: &str) -> Result<()> {
+        match &mut self.snapshots {
+            Snapshots::Git => git::write_baseline_ref(&self.repo, &self.turn_key, id),
+            Snapshots::Sapling(store) => store.persist_baseline(id),
+        }
     }
 
     pub fn baseline(&self) -> Option<&str> {
@@ -257,9 +312,10 @@ impl TurnHost {
         if let Some(&member) = self.resolved.get(cwd) {
             return if member { Membership::Member } else { Membership::NotMember };
         }
-        match git::worktree_of(Path::new(cwd)) {
+        match crate::vcs::worktree_of(self.vcs, Path::new(cwd)) {
             // A resolved root is stable, so record whether it is a member and never shell out
-            // for this cwd again. git canonicalizes it, so the worktree root itself matches too.
+            // for this cwd again. The resolver canonicalizes it, so the worktree root itself
+            // matches too.
             git::Worktree::Root(top) => {
                 let member = top == self.repo;
                 self.resolved.insert(cwd.to_string(), member);
@@ -281,11 +337,12 @@ impl TurnHost {
     fn observe(&mut self, state: WorktreeState) -> bool {
         let transition = self.tracker.observe(state);
         if transition.started {
-            match git::snapshot_worktree(&self.repo) {
+            match self.snapshot() {
                 // The candidate is this worktree as of a moment ago, so it cannot have
                 // diverged from it yet. The next poll runs the check, which is what makes
                 // this an early return rather than a second snapshot of the same tree.
                 Ok(sha) => {
+                    self.pin_candidate(&sha);
                     self.tracker.set_candidate(sha);
                     return transition.ended;
                 }
@@ -297,11 +354,11 @@ impl TurnHost {
         let Some(candidate) = self.tracker.candidate().map(str::to_string) else {
             return transition.ended;
         };
-        match git::snapshot_worktree(&self.repo) {
+        match self.snapshot() {
             Ok(now) if now != candidate => {
                 self.tracker.promote();
-                if let Err(e) = git::write_baseline_ref(&self.repo, &self.turn_key, &candidate) {
-                    logln!("turn baseline ref write failed: {e}");
+                if let Err(e) = self.persist_baseline(&candidate) {
+                    logln!("turn baseline write failed: {e}");
                 }
             }
             Ok(_) => {}
