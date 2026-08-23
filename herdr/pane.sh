@@ -231,18 +231,21 @@ esac
 # Repo discovery; the launch-vs-live split is docs/herdr-api-notes.md). The mode guard
 # keeps auto-open on the event payload's cwd set above.
 is_git_repo() { [ -n "$1" ] && git -C "$1" rev-parse --show-toplevel >/dev/null 2>&1; }
+# A Sapling worktree is a reviewable repo too (specs/sapling.md).
+is_sl_repo() { [ -n "$1" ] && [ -d "$1" ] && (cd "$1" && HGPLAIN=1 sl root >/dev/null 2>&1); }
+is_repo() { is_git_repo "$1" || is_sl_repo "$1"; }
 live=""
 if [ "$mode" != auto-open ] && [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
   fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
   [ -z "$fp" ] || live=$(printf '%s' "$panes_json" |
     jq -r --arg p "$fp" 'first(.result.panes[] | select(.pane_id == $p) | .foreground_cwd // empty)' 2>/dev/null)
 fi
-if is_git_repo "$live"; then
+if is_repo "$live"; then
   cwd="$live"
-elif ! is_git_repo "$cwd"; then
+elif ! is_repo "$cwd"; then
   # Name every candidate the check rejected, or a refusal over an inspected-but-unusable
   # live cwd would read as if no directory was ever tried.
-  refuse "not a git repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
+  refuse "not a git or sl repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
 fi
 
 # A manual open takes focus. The event never does (specs/herdr-host.md).
