@@ -24,6 +24,35 @@ runs, and prints what remains manual. The steps it performs, and why each one is
 4. Run `bin/herdr-reviewr --resolve-plugin-config` and require exit 0 before touching any pane.
 5. Print the pids of running panes still on the old binary.
 
+## What `qa-install` does not cover
+
+It swaps `bin/herdr-reviewr` and nothing else. Two things stay manual, and a
+`herdr plugin install` reverts both.
+
+**The plugin scripts.** A change to `herdr/pane.sh` has to be copied into the installed plugin
+by hand:
+
+```
+cp herdr/pane.sh ~/.config/herdr/plugins/github/persiyanov.reviewr-*/herdr/pane.sh
+```
+
+Skip it and the pane keeps the released gate. The Sapling open gate lives there, so a
+Sapling-capable binary still refuses to open in an `sl` worktree until the script is copied.
+
+**The keybinding.** The plugin ships actions, not keys, so the toggle is bound in the user's own
+`~/.config/herdr/config.toml`, outside this repo:
+
+```toml
+[[keys.command]]
+key = "prefix+r"
+type = "plugin_action"
+command = "persiyanov.reviewr.toggle"
+description = "toggle reviewr pane"
+```
+
+Apply it with `herdr server reload-config`, which takes effect without restarting the session.
+Check it with `herdr config check`.
+
 ## Rule 1: never overwrite the binary in place
 
 `cp target/release/herdr-reviewr <plugin>/bin/herdr-reviewr` onto an existing file keeps the old
