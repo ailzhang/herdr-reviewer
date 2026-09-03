@@ -41,13 +41,21 @@ posts.
 
 ## Install
 
-Prebuilt binaries, no Rust toolchain needed:
+This fork adds Sapling (`sl`) support and publishes no release binaries, so it installs as a
+linked local build. A Rust toolchain is required:
 
 ```bash
-herdr plugin install persiyanov/herdr-reviewr
+git clone https://github.com/ailzhang/herdr-reviewer
+cd herdr-reviewer
+just install   # build release → bin/herdr-reviewr, ad-hoc re-signed on macOS
+herdr plugin link .
 ```
 
-Open it in the current workspace:
+Do **not** run `herdr plugin install ailzhang/herdr-reviewer`. That path executes
+`herdr/install.sh`, which downloads a prebuilt binary from `persiyanov/herdr-reviewr`'s releases
+— upstream is git-only, so you would silently end up on a build with no Sapling support.
+
+Open it in the current workspace. The plugin id is unchanged from upstream:
 
 ```bash
 herdr plugin action invoke open --plugin persiyanov.reviewr
@@ -56,18 +64,23 @@ herdr plugin action invoke open --plugin persiyanov.reviewr
 reviewr auto-opens in new worktrees. `auto_open = false` keeps it hidden until you ask
 ([Configuration](#configuration)).
 
-**To update**, reinstall. Your config is keyed by plugin id and survives:
+**To update**, pull and rebuild. Your config is keyed by plugin id and survives:
 
 ```bash
-herdr plugin uninstall persiyanov.reviewr && herdr plugin install persiyanov/herdr-reviewr
+git pull && just install
 ```
 
-**Without herdr**, reviewr runs as a plain terminal app. Grab a
-[release binary](https://github.com/persiyanov/herdr-reviewr/releases/latest) and point it at a
-repo:
+Then toggle the reviewr pane off and on — an open pane keeps running the old process.
+
+**In a Sapling worktree** the review loop is the same, with three surfaces off because each
+would enumerate a monorepo: **All files**, search, and the **PR** tab
+([specs/sapling.md](specs/sapling.md)).
+
+**Without herdr**, reviewr runs as a plain terminal app:
 
 ```bash
-herdr-reviewr ~/some/repo
+cargo build --release
+./target/release/herdr-reviewr ~/some/repo
 ```
 
 Everything works except **Send** and the **last turn** scope. Those need herdr around.
@@ -447,8 +460,8 @@ own build inside herdr panes, link the checkout. `herdr plugin link` runs the bi
 at `bin/herdr-reviewr`:
 
 ```bash
-git clone https://github.com/persiyanov/herdr-reviewr
-cd herdr-reviewr
+git clone https://github.com/ailzhang/herdr-reviewer
+cd herdr-reviewer
 just install   # build release → bin/herdr-reviewr, ad-hoc re-signed on macOS
 herdr plugin link .
 ```
