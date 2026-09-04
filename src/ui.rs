@@ -1357,14 +1357,25 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
     };
     Some(match &app.branch_base.winner {
         Some(git::ResolvedBase::Branch { name, .. }) => {
-            ("vs ".to_string(), name.clone(), String::new(), tail)
+            ("vs ".to_string(), name.clone(), branch_tip_mark(app, ""), tail)
         }
         Some(git::ResolvedBase::Rev { spelling, oid }) => {
             let (shown, mark) = git::rev_paint(spelling, oid);
-            ("vs ".to_string(), shown, mark.map(|m| format!(" ({m})")).unwrap_or_default(), tail)
+            let mark = mark.map(|m| format!(" ({m})")).unwrap_or_default();
+            ("vs ".to_string(), shown, branch_tip_mark(app, &mark), tail)
         }
         None => (String::new(), "no base".to_string(), String::new(), tail),
     })
+}
+
+/// The base's marker with the range's far end appended, so the base reads as the end it is
+/// rather than as the commit under review (`specs/sapling.md` Scopes). It rides the marker
+/// so the header's truncation keeps or drops the whole range together, never half of it.
+fn branch_tip_mark(app: &App, marker: &str) -> String {
+    match &app.branch_tip {
+        Some(tip) => format!("{marker} → {}", git::abbreviate_oid(tip)),
+        None => marker.to_string(),
+    }
 }
 
 /// The base label as painted: truncated with a trailing `…` to what the header can fit,

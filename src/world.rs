@@ -43,14 +43,23 @@ pub struct WorldInput {
     pub toggled_dirs: HashSet<String>,
 }
 
+/// The `branch` scope's two endpoints: the resolved base the changeset diffs from, and the
+/// commit its far end sits on. The header names both, so the base reads as one end of a
+/// range rather than as the thing under review (`specs/sapling.md` Scopes).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchEnds {
+    pub base: git::BaseStatus,
+    pub tip: Option<String>,
+}
+
 /// The derived state one refresh produces: the scope changeset, the navigator entries, and
-/// the `branch` scope's resolved base. The base rides the snapshot so the header name and
-/// the changeset it heads land whole, from one build (specs/tui.md).
+/// the `branch` scope's endpoints. They ride the snapshot so the header name and the
+/// changeset it heads land whole, from one build (specs/tui.md).
 #[derive(Debug)]
 pub struct WorldSnapshot {
     pub changed: HashMap<String, Annotation>,
     pub entries: Vec<Entry>,
-    pub branch_base: git::BaseStatus,
+    pub branch: BranchEnds,
 }
 
 /// Build the snapshot for `input`. The changeset is computed regardless of tab so the
@@ -64,10 +73,10 @@ pub fn build(input: &WorldInput) -> Result<WorldSnapshot> {
         return Ok(WorldSnapshot {
             changed: HashMap::new(),
             entries: Vec::new(),
-            branch_base: git::BaseStatus::default(),
+            branch: BranchEnds::default(),
         });
     }
-    let (branch_base, changed) = build_changed(input)?;
+    let (branch, changed) = build_changed(input)?;
     let changed_map = annotate(&changed);
     let entries = match input.tab {
         // The whole worktree (ignored included), with expanded ignored dirs loaded lazily.
@@ -75,14 +84,14 @@ pub fn build(input: &WorldInput) -> Result<WorldSnapshot> {
         // `Changes` (the `PR` tab never builds a snapshot).
         _ => changed.iter().map(Entry::from_changed).collect(),
     };
-    Ok(WorldSnapshot { changed: changed_map, entries, branch_base })
+    Ok(WorldSnapshot { changed: changed_map, entries, branch })
 }
 
-/// The active scope's changed files and, on the `branch` scope, the base they diff against —
+/// The active scope's changed files and, on the `branch` scope, the endpoints they span —
 /// the piece a scope switch rebuilds before its frame, so the header count and list never
 /// wear another scope's label (specs/tui.md).
-pub fn build_changed(input: &WorldInput) -> Result<(git::BaseStatus, Vec<ChangedFile>)> {
-    let none = git::BaseStatus::default;
+pub fn build_changed(input: &WorldInput) -> Result<(BranchEnds, Vec<ChangedFile>)> {
+    let none = BranchEnds::default;
     if !crate::vcs::is_repo(input.vcs, &input.repo) {
         return Ok((none(), Vec::new()));
     }
@@ -99,16 +108,17 @@ pub fn build_changed(input: &WorldInput) -> Result<(git::BaseStatus, Vec<Changed
             // frame and reports — degrading to an empty snapshot would blank a populated
             // view over a transient error (specs/overview.md Continuity). A chain where
             // nothing resolves is not a failure: it returns the legible no-base state.
-            let status = crate::vcs::resolve_base(input.vcs, &input.repo, input.base.as_deref())
+            let base = crate::vcs::resolve_base(input.vcs, &input.repo, input.base.as_deref())
                 .map_err(|e| anyhow::anyhow!("{}", e.0))?;
-            let base_oid = status.winner.as_ref().map(|w| w.oid().to_string());
+            let base_oid = base.winner.as_ref().map(|w| w.oid().to_string());
             let changed = crate::vcs::changed_files(
                 input.vcs,
                 &input.repo,
                 input.scope,
                 base_oid.as_deref(),
             )?;
-            Ok((status, changed))
+            let tip = crate::vcs::branch_tip(input.vcs, &input.repo);
+            Ok((BranchEnds { base, tip }, changed))
         }
     }
 }

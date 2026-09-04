@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-19
+Last edited: 2026-09-03
 ---
 
 # TUI
@@ -30,6 +30,7 @@ The terminal frame: the pane layout, the tabs, and how the view stays current.
 - The `All files` tab's header label reads `Files`.
 - On the `branch` scope the header names the base after the scope. Clicking it opens the base picker (`input.md`). With no resolving base it reads `no base`.
 - A branch-name base paints `vs dev`. Any other resolving spelling paints `vs HEAD~1 (a1b2c3d)`. A spelling that is already a prefix of that SHA paints once, `vs a1b2c3d`. The `--base` flag uses the same paint.
+- A Sapling repository names the range's far end after the base, `vs .^ (8a72e97) → bde1f87` (`sapling.md`).
 - A skipped pick or `--base` shows after the base, `vs main · dev missing` — and after the empty state too, `no base · dev missing`, so a dormant choice never reads as never-chosen. A skipped non-branch spelling uses the stored spelling, `· HEAD~1 missing`.
 - A base name the header cannot fit truncates with a trailing `…`. A `spelling (sha)` base clips the spelling and keeps `(sha)` when `(sha)` still fits. The picker always shows it whole. Too narrow for even one column of the name, the base leaves the header rather than paint a nameless `vs`.
 - The header's line totals drop a zero side and vanish when nothing changed, like a file row's stats (`file-list.md`).
@@ -116,3 +117,4 @@ A layout change moves nothing else (`overview.md`), and both remembered shares p
 - [pr-tab](./pr-tab.md)
 - [review-model](./review-model.md)
 - [search](./search.md)
+- [sapling](./sapling.md)

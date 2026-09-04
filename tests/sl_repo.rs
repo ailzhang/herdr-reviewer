@@ -79,6 +79,21 @@ impl Drop for StoreGuard {
     }
 }
 
+/// Paint one frame through ratatui's test backend, like `tests/render.rs`.
+fn painted(app: &herdr_reviewr::app::App) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 20)).unwrap();
+    terminal.draw(|f| herdr_reviewr::ui::render(f, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut out = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            out.push_str(buffer.cell((x, y)).map_or(" ", ratatui::buffer::Cell::symbol));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 macro_rules! sl_repo_or_skip {
     () => {
         match SlRepo::init() {
@@ -258,6 +273,28 @@ fn a_turn_snapshot_promotes_and_diffs_against_the_store() {
     assert_eq!(vcs::file_content(VcsKind::Sapling, &root, &candidate, "clean.txt"), "clean\n");
     // A restart seeds the persisted baseline back.
     assert_eq!(vcs::seed_baseline(VcsKind::Sapling, &root), Some(candidate));
+}
+
+#[test]
+fn the_branch_header_names_both_ends_of_the_range() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "1\n");
+    r.commit_all("first commit");
+    r.write("a.txt", "2\n");
+    r.commit_all("second commit");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, Some(".^".to_string()));
+    app.reload().unwrap();
+
+    let tip = app.branch_tip.clone().expect("the tip rides the branch build");
+    assert_eq!(tip, r.parent(), "the tip is the working-copy parent");
+    let base = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    let want = format!("vs .^ ({}) → {}", &base[..7], &tip[..7]);
+    assert!(
+        painted(&app).contains(&want),
+        "the header names the base and the far end; wanted {want:?}"
+    );
 }
 
 #[test]

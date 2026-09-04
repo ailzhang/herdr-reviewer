@@ -81,6 +81,9 @@ branch); only the sources adapt:
 - The pick is one revision spelling per worktree, stored in the snapshot store. Sapling
   worktrees share no store reviewr may write, so the pick is per-worktree, not per-repository.
 - An empty `public()` answer is a no-base state, never an error.
+- The header names both ends of the `branch` range, `vs .^ (8a72e97) → bde1f87`. A git
+  repository names one end, because its base is a branch and the far end is the reviewer's
+  own branch (`tui.md`).
 - The base picker lists `.^` first, then the local bookmarks, then the draft ancestors of `.`,
   newest first. A typed spelling resolves through `sl log -r`.
 - `.^` is the row that reviews the latest commit. It records the spelling, so it still names the

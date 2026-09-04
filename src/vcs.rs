@@ -110,6 +110,16 @@ pub fn uncommitted_base(kind: VcsKind) -> &'static str {
     }
 }
 
+/// The commit the `branch` scope's range ends at, which the header names beside the base.
+/// A git repository has none to paint: its base is a branch name, and the far end is the
+/// reviewer's own branch (`specs/sapling.md` Scopes).
+pub fn branch_tip(kind: VcsKind, root: &Path) -> Option<String> {
+    match kind {
+        VcsKind::Git => None,
+        VcsKind::Sapling => sl::parent_rev(root),
+    }
+}
+
 /// The merge-base commit of the resolved base and the working copy
 /// (`specs/review-model.md` Base branch).
 pub fn merge_base(kind: VcsKind, root: &Path, base_oid: &str) -> Option<String> {

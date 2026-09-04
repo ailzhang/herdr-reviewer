@@ -514,6 +514,9 @@ pub struct App {
     /// header names its winner (or the skip) and the diff builds against the winner's OID
     /// (`specs/review-model.md`).
     pub branch_base: git::BaseStatus,
+    /// The commit the `branch` scope's range ends at, painted after the base so the range
+    /// reads whole. A git repository has none (`specs/sapling.md` Scopes).
+    pub branch_tip: Option<String>,
     /// Bumped by each pick made in this pane, so an in-flight build that read the old pick
     /// fails the landing's input match instead of reverting the pick (`crate::world::WorldInput`).
     base_epoch: u64,
@@ -774,6 +777,7 @@ impl App {
             vcs,
             base,
             branch_base: git::BaseStatus::default(),
+            branch_tip: None,
             base_epoch: 0,
             scope,
             tab: Tab::Changes,
@@ -1008,6 +1012,7 @@ impl App {
                 // a fresh app would paint `no base` beside a populated frame
                 // (`specs/tui.md`).
                 self.branch_base = std::mem::take(&mut old.branch_base);
+                self.branch_tip = old.branch_tip.take();
                 self.diff = std::mem::take(&mut old.diff);
                 self.visible = std::mem::take(&mut old.visible);
                 self.expanded_folds = std::mem::take(&mut old.expanded_folds);
@@ -1189,9 +1194,10 @@ impl App {
     /// and the scope switch's synchronous rebuild): only the `branch` scope owns a base,
     /// and the base and the changeset it produced land together, so the header name and
     /// the list it heads never disagree (specs/tui.md).
-    fn adopt_branch_base(&mut self, base: git::BaseStatus) {
+    fn adopt_branch_base(&mut self, ends: crate::world::BranchEnds) {
         if self.scope == Scope::Branch {
-            self.branch_base = base;
+            self.branch_base = ends.base;
+            self.branch_tip = ends.tip;
         }
     }
 
@@ -1219,7 +1225,7 @@ impl App {
         let open = self.diff_path.clone();
         self.changed = snapshot.changed;
         self.entries = snapshot.entries;
-        self.adopt_branch_base(snapshot.branch_base);
+        self.adopt_branch_base(snapshot.branch);
         self.rebuild_file_rows();
         self.file_cursor = anchor
             .and_then(|a| self.row_of_anchor(&a))
@@ -2070,8 +2076,8 @@ impl App {
             self.stash.select_anchor = None;
             // `All files` keeps its tree; only the changed set rebuilds before the frame.
             // The tree's annotations refresh behind it via the worker (specs/tui.md).
-            let (branch_base, changed) = crate::world::build_changed(&self.world_input())?;
-            self.adopt_branch_base(branch_base);
+            let (branch, changed) = crate::world::build_changed(&self.world_input())?;
+            self.adopt_branch_base(branch);
             self.changed = crate::world::annotate(&changed);
             // Re-mark the tree in place — the rows are base-independent, only their
             // badges move, so the switch frame never shows the old base's badges
