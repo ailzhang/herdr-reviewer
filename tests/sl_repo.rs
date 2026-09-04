@@ -264,6 +264,35 @@ fn a_pinned_far_end_reads_both_of_a_neighbours_sides_ahead() {
 }
 
 #[test]
+fn a_side_the_file_list_calls_absent_is_never_read() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "base\n");
+    r.write("c.txt", "base\n");
+    r.commit_all("base");
+    r.write("a.txt", "edited\n");
+    r.write("b.txt", "added\n");
+    std::fs::remove_file(r.path().join("c.txt")).unwrap();
+    r.commit_all("under review");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.parent();
+    let parent = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    assert_eq!(app.entries.len(), 3, "modified, added, deleted");
+
+    // `sl cat` on an absent path costs half a second in a monorepo, longer than on a present
+    // one, and the status listing already said the file is not there (`specs/sapling.md`
+    // Reads). The added file's old side and the deleted file's new side are never spawned.
+    assert_eq!(
+        app.warm_targets(),
+        vec![(node.clone(), "b.txt".to_string()), (parent.clone(), "c.txt".to_string())],
+        "the added file reads its new side alone, the deleted file its old side alone"
+    );
+}
+
+#[test]
 fn a_failed_ancestor_query_fails_the_branch_build() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");

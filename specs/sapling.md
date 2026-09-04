@@ -151,7 +151,9 @@ Every Sapling command runs with `HGPLAIN=1`, with the repository root as its wor
 and parses stdout only. The enumerator is `sl status -Tjson -C`: JSON rather than the indented
 copy-source lines, `--copies` so a rename diffs real content. The parent pin is `sl whereami`,
 first line, because it answers in milliseconds where `sl log` pays command dispatch. Content at
-a revision is `sl cat -r`; exit 1 is absence, read as empty content. A commit's content never
+a revision is `sl cat -r`; exit 1 is absence, read as empty content. A side the status listing
+calls absent is never read. An added or untracked file has no old side, and a deleted file has no
+new side. A commit's content never
 changes, so a read caches, and the files within three rows of the cursor read ahead on a worker
 thread. The file cursor opens a diff on every move, and one uncached side is a third of a
 second. A range that ends at a pinned commit reads ahead on both sides, and one that ends at the

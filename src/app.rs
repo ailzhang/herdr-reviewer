@@ -19,7 +19,7 @@ use crate::git;
 use crate::herdr::{self, AgentChoice, SendTarget};
 use crate::highlight::Highlighter;
 use crate::logln;
-use crate::model::{Comment, CommentStore, Scope, Side};
+use crate::model::{ChangeKind, Comment, CommentStore, Scope, Side};
 use crate::theme::{self, Palette};
 
 /// Navigator shares and bounds, as percentages of the body's split axis.
@@ -1504,15 +1504,32 @@ impl App {
     fn content_sides(&self, path: &str, previous_path: Option<&str>) -> (String, String) {
         let new_path = path;
         let old_path = previous_path.unwrap_or(new_path);
+        let (has_old, has_new) = self.sides_present(new_path);
         let old = self
             .old_side_rev()
+            .filter(|_| has_old)
             .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
             .unwrap_or_default();
         let new = match self.new_side_rev() {
-            Some(rev) => crate::vcs::file_content(self.vcs, &self.repo, rev, new_path),
+            Some(rev) if has_new => crate::vcs::file_content(self.vcs, &self.repo, rev, new_path),
+            Some(_) => String::new(),
             None => worktree_content(&self.repo, new_path),
         };
         (old, new)
+    }
+
+    /// Which sides of `path` the changeset says exist. An added or untracked file has no old
+    /// side and a deleted one has no new side, so reading there spawns a command to be told
+    /// what the file list already said. In a monorepo `sl cat` on an absent path is half a
+    /// second, longer than on a present one (`specs/sapling.md` Reads). A path the changeset
+    /// does not list reads both sides, since nothing said otherwise.
+    fn sides_present(&self, path: &str) -> (bool, bool) {
+        let listed = self.entries.iter().find(|e| e.path == path);
+        match listed.and_then(|e| e.annotation.as_ref()).map(|a| a.change) {
+            Some(ChangeKind::Added | ChangeKind::Untracked) => (false, true),
+            Some(ChangeKind::Deleted) => (true, false),
+            _ => (true, true),
+        }
     }
 
     /// The revision the open file's old side reads at, and `None` when the scope has no base
@@ -1579,13 +1596,14 @@ impl App {
         let mut reads = Vec::new();
         for (_, index) in near {
             let Some(entry) = self.entries.get(index) else { continue };
+            let (has_old, has_new) = self.sides_present(&entry.path);
             // Both sides of one row before the next row's, so a reviewer who outran the
             // queue loses whole rows rather than one side of every row.
-            if let Some(rev) = &old {
+            if let (Some(rev), true) = (&old, has_old) {
                 let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
                 reads.push((rev.clone(), path.to_string()));
             }
-            if let Some(rev) = new {
+            if let (Some(rev), true) = (new, has_new) {
                 reads.push((rev.to_string(), entry.path.clone()));
             }
         }
