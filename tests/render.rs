@@ -2023,7 +2023,40 @@ the target body
         "the top scrolled away:
 {out}"
     );
-    assert!(out.contains('┃'), "an overflowing preview shows the scrollbar thumb:\n{out}");
+    assert!(out.contains('█'), "an overflowing preview shows the scrollbar thumb:\n{out}");
+}
+
+/// The glyph immediately left of a pane title, which is that pane's top-left corner. Scoped to
+/// a row carrying a corner, so the header's own `2 Files` tab is not mistaken for the title.
+fn corner_before(out: &str, title: &str) -> char {
+    let row = out
+        .lines()
+        .find(|line| line.contains(title) && (line.contains('┏') || line.contains('┌')))
+        .unwrap_or_else(|| panic!("no `{title}` pane title:\n{out}"));
+    let at = row.find(title).expect("the title is on this row");
+    row[..at].chars().next_back().expect("a corner left of the title")
+}
+
+#[test]
+fn the_focused_pane_carries_the_heavy_border() {
+    let r = Repo::init();
+    r.write("x.rs", "one\n");
+    r.commit_all("init");
+    r.write("x.rs", "two\n");
+    let mut app = app_on(&r);
+
+    // Border weight is the focus cue a hue change cannot carry: it reads beside a pane full of
+    // tinted diff rows, and on a terminal that washes the color out (`specs/theme.md`).
+    app.focus = Focus::Files;
+    let out = render(&app);
+    assert_eq!(corner_before(&out, " Files "), '┏', "the focused file list is heavy:\n{out}");
+    assert_eq!(corner_before(&out, " x.rs "), '┌', "the unfocused read pane is plain:\n{out}");
+
+    // The weight follows focus, not the pane, so `tab` moves it.
+    app.focus = Focus::Diff;
+    let out = render(&app);
+    assert_eq!(corner_before(&out, " Files "), '┌', "the file list goes plain:\n{out}");
+    assert_eq!(corner_before(&out, " x.rs "), '┏', "the read pane takes the weight:\n{out}");
 }
 
 #[test]
@@ -2038,7 +2071,9 @@ fn a_body_that_fits_the_pane_shows_no_scrollbar() {
     app.pr =
         PrView::Pr(Box::new(PrSnapshot { body: "one short line".into(), ..common::pr_snapshot() }));
     let out = render(&app);
-    assert!(!out.contains('┃'), "content that fits paints no thumb:\n{out}");
+    // `█` is the thumb and nothing else paints it, so its absence is the thumb's absence — a
+    // focused pane's own border is heavy now, which `┃` could no longer tell apart.
+    assert!(!out.contains('█'), "content that fits paints no thumb:\n{out}");
 
     // The same pane paints the thumb once its body overflows, so the absence above
     // proves fitting content, not a dead scrollbar.
@@ -2048,7 +2083,7 @@ fn a_body_that_fits_the_pane_shows_no_scrollbar() {
     }
     app.pr = PrView::Pr(Box::new(PrSnapshot { body: long, ..common::pr_snapshot() }));
     let out = render(&app);
-    assert!(out.contains('┃'), "an overflowing PR body shows the thumb:\n{out}");
+    assert!(out.contains('█'), "an overflowing PR body shows the thumb:\n{out}");
 }
 
 #[test]

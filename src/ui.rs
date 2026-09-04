@@ -13,7 +13,7 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+    Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
     ScrollbarState,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -4145,14 +4145,15 @@ fn render_overflow_scrollbar(
         return;
     }
     let mut state = ScrollbarState::new(max).position(scroll);
-    // A heavy-line accent thumb on the untouched border: the border thickens where the
-    // reader is, and no track paints over it.
+    // A solid accent thumb on the untouched border: the border fills where the reader is, and
+    // no track paints over it. Solid rather than the heavy line `┃`, because a focused pane's
+    // border is already heavy and the thumb has to read over both weights (`bordered`).
     frame.render_stateful_widget(
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(None)
-            .thumb_symbol("┃")
+            .thumb_symbol("█")
             .thumb_style(Style::default().fg(p.blue)),
         track,
         &mut state,
@@ -4420,10 +4421,15 @@ fn check_glyph(p: &Palette, status: forge::CheckStatus) -> (&'static str, Color)
 // --- helpers -------------------------------------------------------------------
 
 fn bordered(title: &str, focused: bool, p: &Palette) -> Block<'static> {
-    // A focused pane gets a blue border; an unfocused one recedes to a surface tone.
-    let color = if focused { p.blue } else { p.surface2 };
+    // A focused pane gets a blue border; an unfocused one recedes to a surface tone. The weight
+    // carries the same fact as a shape, not a hue: a one-cell line changing color is easy to
+    // miss beside a pane full of tinted diff rows, and a heavy line still reads on a washed-out
+    // terminal (specs/theme.md Palette derivation).
+    let (color, weight) =
+        if focused { (p.blue, BorderType::Thick) } else { (p.surface2, BorderType::Plain) };
     Block::default()
         .borders(Borders::ALL)
+        .border_type(weight)
         .border_style(Style::default().fg(color))
         .title(framed_title(title))
 }
