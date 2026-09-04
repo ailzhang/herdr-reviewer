@@ -85,6 +85,8 @@ branch); only the sources adapt:
   pick names one commit to review, which ends it at that commit.
 - The header names the far end only when the pick pins it, `vs f01c3d2 → 2eb84b9`. A range that
   ends at the working copy names the base alone, as a git repository does (`tui.md`).
+- The pinned far end names its code review number, `vs f01c3d2 → D113340447`, and its
+  abbreviated node when it carries none, exactly as its base-picker row does.
 - The pinned far end's description follows the nodes, `vs f01c3d2 → 2eb84b9 · fix the thing`, and a
   header too narrow for all of it drops the description before the nodes.
 - The base picker lists `whole stack` first, then the local bookmarks, then the draft commits

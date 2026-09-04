@@ -83,6 +83,8 @@ pub struct BranchEnds {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tip {
     pub oid: String,
+    /// The commit's code review number, empty when it carries none.
+    pub diff: String,
     /// The commit description's first line, empty when the commit has none.
     pub title: String,
 }

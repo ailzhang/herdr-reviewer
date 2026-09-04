@@ -535,17 +535,24 @@ fn resolve_pick(root: &Path, pick: &Pick) -> Result<Option<(ResolvedBase, Option
     // The recorded base is the tip's parent, so every end and its title come from one
     // commit and one spawn. Reading the recorded spelling instead would pair an amended
     // commit with the parent of the node it replaced, the same commit only until a rebase.
-    let template = "{node} {p1node} {desc|firstline}";
+    // The review number rides the same template. It holds no space, so it splits off ahead
+    // of the description exactly as the two nodes do, and an unsubmitted commit's empty
+    // field leaves the description in the last position all the same.
+    let template = "{node} {p1node} {phabdiff} {desc|firstline}";
     let Some(line) = log_line(root, &successor_revset(tip), template)? else { return Ok(None) };
-    let mut fields = line.splitn(3, ' ');
+    let mut fields = line.splitn(4, ' ');
     let (Some(tip_oid), Some(base_oid)) = (fields.next(), fields.next()) else { return Ok(None) };
+    let diff = fields.next().unwrap_or("").trim().to_string();
     // A root commit's parent is the null node. The range needs both ends, so the pick is
     // skipped exactly as one whose commit has gone away.
     if base_oid.bytes().all(|b| b == b'0') {
         return Ok(None);
     }
-    let far =
-        Tip { oid: tip_oid.to_string(), title: fields.next().unwrap_or("").trim().to_string() };
+    let far = Tip {
+        oid: tip_oid.to_string(),
+        diff,
+        title: fields.next().unwrap_or("").trim().to_string(),
+    };
     // The base paints as its own node, never as the `<node>^` that spelled it: the header
     // already names the far end, and `spelling (oid)` would print the pair twice.
     let winner = ResolvedBase::Rev { spelling: base_oid.to_string(), oid: base_oid.to_string() };

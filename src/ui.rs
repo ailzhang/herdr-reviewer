@@ -1393,9 +1393,11 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
 /// The base's marker with the range's far end appended, which a pick naming one commit to
 /// review pins (`specs/sapling.md` Scopes). A range ending at the working copy has no far
 /// end to name. It rides the marker so the header's truncation keeps or drops the whole
-/// range together, never half of it.
+/// range together, never half of it. The far end names its code review number, and falls
+/// back to its abbreviated node, exactly as its base-picker row does.
 fn branch_tip_mark(app: &App, marker: &str) -> String {
     match &app.branch_tip {
+        Some(tip) if !tip.diff.is_empty() => format!("{marker} → {}", tip.diff),
         Some(tip) => format!("{marker} → {}", git::abbreviate_oid(&tip.oid)),
         None => marker.to_string(),
     }
@@ -2397,6 +2399,25 @@ mod tests {
         };
         assert_eq!(super::base_trail(&commit("D113340447")), "(D113340447)");
         assert_eq!(super::base_trail(&commit("")), "(2eb84b9)");
+    }
+
+    #[test]
+    fn a_pinned_far_end_names_its_code_review_number_when_it_has_one() {
+        let mark = |diff: &str| {
+            let mut app = crate::app::App::new(
+                std::path::PathBuf::from("."),
+                crate::model::Scope::Branch,
+                None,
+            );
+            app.branch_tip = Some(crate::vcs::Tip {
+                oid: "2eb84b9c1d".into(),
+                diff: diff.into(),
+                title: "fix the thing".into(),
+            });
+            super::branch_tip_mark(&app, " (f01c3d2)")
+        };
+        assert_eq!(mark("D113340447"), " (f01c3d2) → D113340447");
+        assert_eq!(mark(""), " (f01c3d2) → 2eb84b9");
     }
 
     /// The production pairing: box rows built at the same width the caret maps against.
