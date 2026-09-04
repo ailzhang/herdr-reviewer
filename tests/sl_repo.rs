@@ -1012,6 +1012,28 @@ fn a_sapling_pane_offers_the_changes_tab_alone() {
 }
 
 #[test]
+fn search_never_opens_in_a_sapling_pane_and_never_arms_its_engine() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let mut app = herdr_reviewr::app::App::new(root, Scope::Uncommitted, None);
+    app.reload().unwrap();
+
+    // The search engine walks and content-indexes the whole worktree. In a monorepo that is
+    // millions of files through a virtual filesystem, so the pane says no instead
+    // (`specs/sapling.md` Disabled surfaces).
+    app.open_search();
+    assert_eq!(app.status, "search needs a git repository");
+    assert_eq!(app.mode, herdr_reviewr::app::Mode::Normal, "the screen never replaces the body");
+    assert!(app.search.is_none(), "no overlay state to type into");
+
+    // `search_dirty` is the flag the event loop reads to spawn the engine, so this is the
+    // assertion that stands between a Sapling pane and that walk.
+    assert!(!app.search_dirty, "the engine is never armed");
+}
+
+#[test]
 fn last_turn_diffs_a_sapling_worktree_against_the_snapshot_baseline() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");
