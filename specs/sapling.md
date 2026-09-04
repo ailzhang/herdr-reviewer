@@ -89,11 +89,15 @@ branch); only the sources adapt:
   ancestors, newest first. A typed spelling resolves through `sl log -r`.
 - Picking a commit row reviews that commit alone, against its own parent. No merge base stands
   between the two: the range's ends are the commit and its parent, whatever `.` has become.
+- A picked commit resolves through its successors, so an `amend` or a `rebase` moves the review
+  onto the commit's new node, never leaves it on the node that was replaced.
+- The parent re-derives from the resolved commit, never from the recorded spelling, so a rebased
+  commit diffs against the parent it has now.
 - A commit pick names its commit in the export's preamble, the one range whose reviewed state
   is not the worktree the agent edits (`review-model.md` Export).
 - Picking `whole stack` clears the pick, so the chain falls back to the public base.
 - A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
-  restart. An end that has gone away skips the whole pick.
+  restart. A commit with no live successor skips the whole pick.
 - A commit row reads as its description's first line and is marked with the short hash it
   records. The filter matches the description and the hash.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching

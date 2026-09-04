@@ -310,6 +310,38 @@ fn a_commit_pick_reviews_that_commit_against_its_own_parent() {
     assert!(painted(&app).contains(&want), "the header names both ends; wanted {want:?}");
 }
 
+#[test]
+fn a_commit_pick_follows_the_commit_through_an_amend() {
+    let r = sl_repo_or_skip!();
+    for msg in ["first commit", "second commit"] {
+        r.write(&format!("{}.txt", msg.split(' ').next().unwrap()), "committed\n");
+        r.commit_all(msg);
+    }
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    let parent = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+
+    // The reviewed commit is where the agent applies its fix, and `amend` replaces its node.
+    r.write("second.txt", "committed\namended\n");
+    r.write("extra.txt", "the amend added this\n");
+    r.sl(&["addremove", "-q"]);
+    r.sl(&["amend"]);
+    let amended = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    assert_ne!(amended, node, "the amend replaces the node");
+
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+
+    assert_eq!(app.branch_tip.as_deref(), Some(amended.as_str()), "the pick follows its successor");
+    let mut paths = app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(paths, ["extra.txt", "second.txt"], "the amended content is what is under review");
+    let want = format!("vs {} → {}", &parent[..7], &amended[..7]);
+    assert!(painted(&app).contains(&want), "the header names the new node; wanted {want:?}");
+}
+
 /// Captures the export payload, so a test can read what the agent would have been sent.
 #[derive(Default)]
 struct Captured(std::cell::RefCell<String>);

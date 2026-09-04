@@ -179,6 +179,13 @@ fn changed_set(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<
     Ok(files)
 }
 
+/// The path a `---`/`+++` header names: everything up to the first tab. `sl diff --git`
+/// appends a tab when the path holds a space, the unified-diff convention for separating
+/// the name from a trailing field, and the untrimmed name matches no status path.
+fn header_path(rest: &str) -> String {
+    rest.split('\t').next().unwrap_or(rest).to_string()
+}
+
 /// Per-file `(additions, deletions)` from `sl diff --git` output. Counts come from the
 /// hunk lines, keyed under the new path from the `+++ b/` header (the `--- a/` header
 /// for a deletion). A `---`/`+++` line inside a hunk is content — headers only occur
@@ -207,11 +214,11 @@ fn diff_counts(out: &str) -> HashMap<String, (u32, u32)> {
         }
         if !in_hunk {
             if let Some(old) = line.strip_prefix("--- a/") {
-                old_name = Some(old.to_string());
+                old_name = Some(header_path(old));
                 continue;
             }
             if let Some(new) = line.strip_prefix("+++ b/") {
-                file = Some(new.to_string());
+                file = Some(header_path(new));
                 continue;
             }
             if line.starts_with("+++ /dev/null") {
@@ -295,11 +302,21 @@ impl Pick {
 /// reads it as a hash prefix: bare in a revset, Sapling reads `123456` as a local
 /// revision number and resolves a decade-old commit (`specs/sapling.md` Scopes).
 fn resolve_rev(root: &Path, spelling: &str) -> Result<Option<String>, GitFail> {
-    if spelling.is_empty() || spelling.starts_with('-') {
+    if unusable(spelling) {
         return Ok(None);
     }
-    let revset = probe_revset(spelling);
-    let args = ["log", "-r", &revset, "-T", "{node}"];
+    log_node(root, &probe_revset(spelling))
+}
+
+/// A spelling reviewr never hands to `sl log -r`: empty, or flag-shaped, which the
+/// command would read as one of its own options.
+fn unusable(spelling: &str) -> bool {
+    spelling.is_empty() || spelling.starts_with('-')
+}
+
+/// Run one revset and read the node it names, `Ok(None)` when it names none.
+fn log_node(root: &Path, revset: &str) -> Result<Option<String>, GitFail> {
+    let args = ["log", "-r", revset, "-T", "{node}"];
     let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -413,16 +430,34 @@ fn resolve_pick(
     root: &Path,
     pick: &Pick,
 ) -> Result<Option<(ResolvedBase, Option<String>)>, GitFail> {
-    let Some(base_oid) = resolve_rev(root, &pick.base)? else { return Ok(None) };
     let Some(tip) = &pick.tip else {
+        let Some(base_oid) = resolve_rev(root, &pick.base)? else { return Ok(None) };
         let winner = ResolvedBase::Rev { spelling: pick.base.clone(), oid: base_oid };
         return Ok(Some((winner, None)));
     };
-    let Some(tip_oid) = resolve_rev(root, tip)? else { return Ok(None) };
+    if unusable(tip) {
+        return Ok(None);
+    }
+    let Some(tip_oid) = log_node(root, &successor_revset(tip))? else { return Ok(None) };
+    // The recorded base is the tip's parent, so it re-derives from the tip reviewr just
+    // resolved. Reading the recorded spelling instead would pair an amended commit with
+    // the parent of the node it replaced, which is the same commit only until a rebase.
+    let Some(base_oid) = log_node(root, &format!("limit(p1(id({tip_oid})), 1)"))? else {
+        return Ok(None);
+    };
     // The base paints as its own node, never as the `<node>^` that spelled it: the header
     // already names the far end, and `spelling (oid)` would print the pair twice.
     let winner = ResolvedBase::Rev { spelling: base_oid.clone(), oid: base_oid };
     Ok(Some((winner, Some(tip_oid))))
+}
+
+/// The revset a picked commit resolves through: itself while it is live, and the node that
+/// replaced it once `amend` or `rebase` has obsoleted it (`specs/sapling.md` Scopes).
+/// `successors` is transitive and holds the commit itself, so a live commit answers itself
+/// and a chain of amends answers its newest node. `last(sort(.., rev))` picks the newest of
+/// a divergent set, and every `limit` bounds the walk to one answer.
+fn successor_revset(spelling: &str) -> String {
+    format!("limit(last(sort(successors({}) - obsolete(), rev)), 1)", probe_revset(spelling))
 }
 
 /// Resolve one typed base-picker spelling (`specs/input.md` Base picker).
@@ -1004,6 +1039,16 @@ mod tests {
         assert_eq!(probe_revset("master"), "limit(master, 1)");
         assert_eq!(probe_revset("last(public() & ::.)"), "limit(last(public() & ::.), 1)");
     }
+
+    #[test]
+    fn a_picked_commit_probes_through_its_successors() {
+        // The recorded node is a hash, so it reaches `successors` through `id()` too.
+        assert_eq!(
+            super::successor_revset("beef1234"),
+            "limit(last(sort(successors(limit(id(beef1234), 1)) - obsolete(), rev)), 1)"
+        );
+    }
+
     use std::collections::{BTreeMap, HashMap};
 
     #[test]
@@ -1040,6 +1085,21 @@ mod tests {
         let m = diff_counts(out);
         assert_eq!(m["new.rs"], (1, 1));
         assert!(!m.contains_key("old.rs"));
+    }
+
+    #[test]
+    fn diff_counts_reads_a_path_whose_header_carries_a_trailing_tab() {
+        // A path holding a space: `sl diff --git` separates the name from the header's
+        // trailing field with a tab, and the key must still be the status path.
+        let out = "diff --git a/old name.txt b/old name.txt\n\
+                   --- a/old name.txt\t\n\
+                   +++ b/old name.txt\t\n\
+                   @@ -1,2 +1,2 @@\n \
+                   spaced\n\
+                   -content\n\
+                   +edited\n";
+        let m = diff_counts(out);
+        assert_eq!(m["old name.txt"], (1, 1));
     }
 
     #[test]
