@@ -243,6 +243,24 @@ fn an_unknown_flag_spelling_is_skipped_never_an_error() {
 }
 
 #[test]
+fn a_dormant_pick_names_its_node_abbreviated() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "a\n");
+    r.commit_all("base");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    // A pick records all 40 hex digits, so the whole node would fill the header.
+    let gone = "0123456789abcdef0123456789abcdef01234567";
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{gone}^..{gone}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+
+    let painted = painted(&app);
+    assert!(painted.contains(&format!("{} missing", &gone[..7])), "{painted}");
+    assert!(!painted.contains(gone), "the whole node never paints");
+}
+
+#[test]
 fn file_content_reads_at_a_rev_and_absence_is_empty() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "committed content\n");
@@ -390,7 +408,11 @@ fn a_pick_on_the_root_commit_is_skipped_for_want_of_a_parent() {
     let ends = vcs::resolve_base(VcsKind::Sapling, &root, None).unwrap();
     assert_eq!(ends.tip, None);
     assert_eq!(ends.base.winner, None, "the repo has no public commit to fall back to");
-    assert_eq!(ends.base.skipped.as_deref(), Some(node.as_str()), "the pick reports as skipped");
+    assert_eq!(
+        ends.base.skipped.as_deref(),
+        Some(&node[..7]),
+        "the pick reports as skipped, named by its abbreviated node"
+    );
 }
 
 /// Captures the export payload, so a test can read what the agent would have been sent.

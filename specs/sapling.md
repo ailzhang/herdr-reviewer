@@ -102,6 +102,8 @@ branch); only the sources adapt:
 - A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
   restart. The pick skips whole when its commit has no live successor, and when that
   successor is a root commit with no parent to diff against.
+- A dormant pick names a node abbreviated, `2eb84b9 missing`, and a bookmark name whole. The
+  recorded spelling is all 40 hex digits, which would fill the header.
 - A commit row reads as its description's first line and is marked with the short hash it
   records. The filter matches the description and the hash.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching

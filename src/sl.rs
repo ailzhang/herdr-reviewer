@@ -356,9 +356,13 @@ impl Pick {
     }
 
     /// What the header names when this pick goes dormant: the commit it reviewed, since
-    /// that is the end the reviewer chose (`specs/review-model.md` Base branch).
+    /// that is the end the reviewer chose (`specs/review-model.md` Base branch). A node
+    /// names itself abbreviated — a Sapling pick records all 40 hex digits, which would
+    /// fill the header (`specs/sapling.md` Scopes).
     fn label(&self) -> String {
-        self.tip.clone().unwrap_or_else(|| self.base.clone())
+        let end = self.tip.clone().unwrap_or_else(|| self.base.clone());
+        let node = end.len() > 7 && end.bytes().all(|b| b.is_ascii_hexdigit());
+        if node { crate::git::abbreviate_oid(&end) } else { end }
     }
 }
 
