@@ -151,6 +151,14 @@ pub fn over_byte_budget(len: usize) -> bool {
     len > MAX_BYTES
 }
 
+/// Whether a pair of sides is beyond what the line differ may be handed. The differ is
+/// Myers, so a pair that is both large and heavily changed costs minutes, and every caller
+/// that runs it shares this one gate rather than each carrying its own budget.
+#[must_use]
+pub fn over_diff_budget(old: &str, new: &str) -> bool {
+    over_byte_budget(old.len() + new.len()) || old.lines().count() + new.lines().count() > MAX_LINES
+}
+
 impl Default for FileDiff {
     fn default() -> Self {
         Self::empty()
@@ -189,9 +197,7 @@ impl FileDiff {
         if old.contains('\0') || new.contains('\0') {
             return notice(FileState::Binary);
         }
-        if over_byte_budget(old.len() + new.len())
-            || old.lines().count() + new.lines().count() > MAX_LINES
-        {
+        if over_diff_budget(old, new) {
             return notice(FileState::TooLarge);
         }
 

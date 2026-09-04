@@ -56,6 +56,8 @@ divergence check that promotes a candidate compares digests exactly as git compa
   worktree, because its baseline side exists only in the store. Every other candidate had the
   parent's content at the turn start, so its kind and counts come from that status pass and one
   `sl diff` — never one subprocess per file.
+- A turn-start-dirty file past the diff pane's render budget counts `(0, 0)`, as a binary one
+  does.
 - The current baseline persists in the store and survives pane restarts.
 - Writing a new baseline keeps a small tail of recent baselines and drops the rest. Two
   panes share one worktree's store, so a promotion in one must not delete the other's

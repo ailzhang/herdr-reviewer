@@ -335,12 +335,20 @@ fn diff_counts(out: &str) -> HashMap<String, (u32, u32)> {
 /// `(additions, deletions)` computed in-process from two contents — the `last-turn`
 /// counts, whose baseline side exists only in the store (`specs/sapling.md`). Binary
 /// content counts (0, 0), matching git's numstat.
+///
+/// A pair over the differ's budget counts (0, 0) too. Every other scope's counts come from
+/// `sl diff`, which streams; these run Myers on the world worker every poll, and a pair that
+/// is both large and heavily changed never finishes. The file the pane refuses to render is
+/// exactly the file whose counts stay unread.
 fn text_counts(old: &[u8], new: &[u8]) -> (u32, u32) {
     if old.contains(&0) || new.contains(&0) {
         return (0, 0);
     }
     let old = String::from_utf8_lossy(old);
     let new = String::from_utf8_lossy(new);
+    if crate::diff::over_diff_budget(&old, &new) {
+        return (0, 0);
+    }
     let diff = similar::TextDiff::from_lines(old.as_ref(), new.as_ref());
     let mut add = 0u32;
     let mut del = 0u32;
@@ -1305,6 +1313,25 @@ mod tests {
         assert_eq!(text_counts(b"a\nb\n", b"a\nc\nd\n"), (2, 1));
         assert_eq!(text_counts(b"", b"x\n"), (1, 0));
         assert_eq!(text_counts(b"bin\0", b"x"), (0, 0));
+    }
+
+    #[test]
+    fn text_counts_refuses_a_pair_the_pane_would_not_render() {
+        // 26k lines reordered: every line survives, so the differ explores a wide edit graph.
+        // Ungated this pair takes 2.8s, and the cost is quadratic — 60k lines take 15s and
+        // 120k take a minute. `last-turn` pays it on the world worker every poll, for a file
+        // the pane shows `too_large` for either way.
+        const N: usize = 26_000;
+        let side = |order: fn(usize) -> usize| -> Vec<u8> {
+            let mut out = Vec::new();
+            for i in 0..N {
+                out.extend_from_slice(format!("line {} filler content\n", order(i)).as_bytes());
+            }
+            out
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(text_counts(&side(|i| i), &side(|i| i * 7 % N)), (0, 0));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "the gate did not hold");
     }
 
     #[test]
