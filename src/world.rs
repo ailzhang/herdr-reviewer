@@ -393,6 +393,10 @@ pub struct WorldJob {
     /// A user-initiated switch re-reveals the cursor when its result lands; a poll never
     /// does (specs/tui.md).
     pub reveal: bool,
+    /// The path whose diff is on screen, so the worker can read its sides before handing
+    /// the snapshot over. It rides the job rather than the input: the reviewer moving the
+    /// file cursor must not fail a landing's input match ([`WorldInput`]).
+    pub open: Option<String>,
 }
 
 /// A finished job: the tag it was built for, the sample's outcome (`None` when the job
@@ -405,6 +409,49 @@ pub struct WorldCompletion {
     pub reveal: bool,
     pub turn: Option<TurnReport>,
     pub snapshot: Option<Result<WorldSnapshot>>,
+}
+
+/// Read the open file's two sides at the revisions this build resolved, so the frame that
+/// lands the snapshot finds them cached. Landing rebuilds that diff on the frame loop, and an
+/// `sl amend` moves the far end under the file on screen, which is the one landing that would
+/// otherwise spawn `sl cat` there (`specs/sapling.md` Reads).
+///
+/// A cursor move between the request and the landing leaves this reading a file no longer on
+/// screen. That costs one read on a worker thread, where the neighbour warm has already
+/// covered the row the reviewer moved to.
+fn preload_open(input: &WorldInput, snapshot: &WorldSnapshot, path: &str) {
+    for (rev, path) in open_reads(input, snapshot, path) {
+        crate::vcs::preload_content(input.vcs, &input.repo, &rev, &path);
+    }
+}
+
+/// The reads [`preload_open`] makes, old side first. Empty off the `Changes` tab, where a file
+/// opens as whole content with no two sides to resolve.
+pub fn open_reads(
+    input: &WorldInput,
+    snapshot: &WorldSnapshot,
+    path: &str,
+) -> Vec<(String, String)> {
+    if input.tab != Tab::Changes {
+        return Vec::new();
+    }
+    let (old_rev, new_rev) = crate::vcs::read_revs(
+        input.vcs,
+        &input.repo,
+        input.scope,
+        &snapshot.branch,
+        input.turn_baseline.as_deref(),
+    );
+    let previous =
+        snapshot.entries.iter().find(|e| e.path == path).and_then(|e| e.previous_path.as_deref());
+    let (old, new) = crate::file_list::side_reads(
+        &snapshot.entries,
+        path,
+        previous,
+        old_rev.as_deref(),
+        new_rev.as_deref(),
+    );
+    [old, new].into_iter().flatten().collect()
 }
 
 /// Run the world worker until the request channel closes. The latest request wins: queued
@@ -429,6 +476,9 @@ pub fn spawn(
                 let turn = job.sample_turn.then(|| host.sample());
                 job.input.turn_baseline = host.baseline().map(str::to_string);
                 let snapshot = job.input.tab.is_file_tab().then(|| build(&job.input));
+                if let (Some(path), Some(Ok(built))) = (&job.open, &snapshot) {
+                    preload_open(&job.input, built, path);
+                }
                 let completion = WorldCompletion {
                     generation: job.generation,
                     input: job.input,

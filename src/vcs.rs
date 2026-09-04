@@ -141,6 +141,48 @@ pub fn warm_content(kind: VcsKind, root: &Path, rev: &str, path: &str) {
     }
 }
 
+/// Read one file into the backend's content cache and wait for it. The world worker calls
+/// this before handing over a snapshot that moved the revisions under the open file, so the
+/// landing frame finds a cache hit where it would otherwise spawn `sl cat`. Git warms
+/// nothing, on the same reasoning as [`warm_content`].
+pub fn preload_content(kind: VcsKind, root: &Path, rev: &str, path: &str) {
+    match kind {
+        VcsKind::Git => (),
+        VcsKind::Sapling => {
+            sl::file_content(root, rev, path);
+        }
+    }
+}
+
+/// The revisions the open file's two sides read at, in the order old then new. A `None` old
+/// side is a scope with no base to read from. A `None` new side is the worktree, which is
+/// every side but a `branch` range whose far end a commit pick pinned (`specs/sapling.md`
+/// Scopes).
+///
+/// One derivation for the diff build, the neighbour warm, and the world worker's preload, so
+/// none of them can fill or await a key another will not ask for.
+pub fn read_revs(
+    kind: VcsKind,
+    root: &Path,
+    scope: Scope,
+    branch: &BranchEnds,
+    turn_baseline: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let old = match scope {
+        Scope::Uncommitted => Some(uncommitted_base(kind).to_string()),
+        Scope::Branch => match branch.base.winner.as_ref().map(git::ResolvedBase::oid) {
+            // A pinned far end's base is that commit's own parent, so no merge base stands
+            // between the two.
+            Some(base) if branch.tip.is_some() => Some(base.to_string()),
+            Some(base) => merge_base(kind, root, base),
+            None => None,
+        },
+        Scope::LastTurn => turn_baseline.map(str::to_string),
+    };
+    let new = branch.tip.as_ref().filter(|_| scope == Scope::Branch).map(|t| t.oid.clone());
+    (old, new)
+}
+
 /// The merge-base commit of the resolved base and the working copy
 /// (`specs/review-model.md` Base branch).
 pub fn merge_base(kind: VcsKind, root: &Path, base_oid: &str) -> Option<String> {

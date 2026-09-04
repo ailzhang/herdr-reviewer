@@ -19,7 +19,7 @@ use crate::git;
 use crate::herdr::{self, AgentChoice, SendTarget};
 use crate::highlight::Highlighter;
 use crate::logln;
-use crate::model::{ChangeKind, Comment, CommentStore, Scope, Side};
+use crate::model::{Comment, CommentStore, Scope, Side};
 use crate::theme::{self, Palette};
 
 /// Navigator shares and bounds, as percentages of the body's split axis.
@@ -1503,63 +1503,41 @@ impl App {
     /// real edits, not a wholesale delete-and-add.
     fn content_sides(&self, path: &str, previous_path: Option<&str>) -> (String, String) {
         let new_path = path;
-        let old_path = previous_path.unwrap_or(new_path);
-        let (has_old, has_new) = self.sides_present(new_path);
-        let old = self
-            .old_side_rev()
-            .filter(|_| has_old)
-            .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
-            .unwrap_or_default();
-        let new = match self.new_side_rev() {
-            Some(rev) if has_new => crate::vcs::file_content(self.vcs, &self.repo, rev, new_path),
-            Some(_) => String::new(),
+        let (old_rev, new_rev) = self.side_revs();
+        let pinned = new_rev.is_some();
+        let (old_read, new_read) = crate::file_list::side_reads(
+            &self.entries,
+            new_path,
+            previous_path,
+            old_rev.as_deref(),
+            new_rev.as_deref(),
+        );
+        let read = |r: Option<(String, String)>| {
+            r.map(|(rev, path)| crate::vcs::file_content(self.vcs, &self.repo, &rev, &path))
+        };
+        let old = read(old_read).unwrap_or_default();
+        // A pinned far end reads the new side from that commit. Every other range reads the
+        // worktree, which is a file read (`specs/sapling.md` Scopes).
+        let new = match read(new_read) {
+            Some(content) => content,
+            None if pinned => String::new(),
             None => worktree_content(&self.repo, new_path),
         };
         (old, new)
     }
 
-    /// Which sides of `path` the changeset says exist. An added or untracked file has no old
-    /// side and a deleted one has no new side, so reading there spawns a command to be told
-    /// what the file list already said. In a monorepo `sl cat` on an absent path is half a
-    /// second, longer than on a present one (`specs/sapling.md` Reads). A path the changeset
-    /// does not list reads both sides, since nothing said otherwise.
-    fn sides_present(&self, path: &str) -> (bool, bool) {
-        let listed = self.entries.iter().find(|e| e.path == path);
-        match listed.and_then(|e| e.annotation.as_ref()).map(|a| a.change) {
-            Some(ChangeKind::Added | ChangeKind::Untracked) => (false, true),
-            Some(ChangeKind::Deleted) => (true, false),
-            _ => (true, true),
-        }
-    }
-
-    /// The revision the open file's old side reads at, and `None` when the scope has no base
-    /// to read from. One derivation, shared by the diff build and the neighbour warm, so the
-    /// warm can never fill the cache under a key the build will not ask for.
-    fn old_side_rev(&self) -> Option<String> {
-        match self.scope {
-            Scope::Uncommitted => Some(crate::vcs::uncommitted_base(self.vcs).to_string()),
-            Scope::Branch => {
-                let base = self.branch_base.winner.as_ref().map(git::ResolvedBase::oid)?;
-                // A pinned far end's base is that commit's own parent, so no merge base
-                // stands between the two.
-                match self.branch_tip {
-                    Some(_) => Some(base.to_string()),
-                    None => crate::vcs::merge_base(self.vcs, &self.repo, base),
-                }
-            }
-            Scope::LastTurn => self.turn_baseline.clone(),
-        }
-    }
-
-    /// The revision the open file's new side reads at, and `None` when it reads the worktree.
-    /// A pinned far end diffs commit to commit, so the new side reads from that commit rather
-    /// than from the worktree (`specs/sapling.md` Scopes). Shared with the neighbour warm on
-    /// the same terms as [`Self::old_side_rev`].
-    fn new_side_rev(&self) -> Option<&str> {
-        match (&self.branch_tip, self.scope) {
-            (Some(tip), Scope::Branch) => Some(tip.oid.as_str()),
-            _ => None,
-        }
+    /// The revisions the open file's two sides read at, old then new
+    /// ([`crate::vcs::read_revs`], which the world worker's preload shares).
+    fn side_revs(&self) -> (Option<String>, Option<String>) {
+        let ends =
+            crate::vcs::BranchEnds { base: self.branch_base.clone(), tip: self.branch_tip.clone() };
+        crate::vcs::read_revs(
+            self.vcs,
+            &self.repo,
+            self.scope,
+            &ends,
+            self.turn_baseline.as_deref(),
+        )
     }
 
     /// Read the neighbouring files into the backend's cache, off the frame loop. The file
@@ -1582,7 +1560,7 @@ impl App {
         if self.tab != Tab::Changes {
             return Vec::new();
         }
-        let (old, new) = (self.old_side_rev(), self.new_side_rev());
+        let (old, new) = self.side_revs();
         // Nearest first, so a queue the reviewer outran drops the far end of the window
         // rather than the row they are about to land on.
         let mut near: Vec<(usize, usize)> = self
@@ -1596,16 +1574,16 @@ impl App {
         let mut reads = Vec::new();
         for (_, index) in near {
             let Some(entry) = self.entries.get(index) else { continue };
-            let (has_old, has_new) = self.sides_present(&entry.path);
+            let (old_read, new_read) = crate::file_list::side_reads(
+                &self.entries,
+                &entry.path,
+                entry.previous_path.as_deref(),
+                old.as_deref(),
+                new.as_deref(),
+            );
             // Both sides of one row before the next row's, so a reviewer who outran the
             // queue loses whole rows rather than one side of every row.
-            if let (Some(rev), true) = (&old, has_old) {
-                let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-                reads.push((rev.clone(), path.to_string()));
-            }
-            if let (Some(rev), true) = (new, has_new) {
-                reads.push((rev.to_string(), entry.path.clone()));
-            }
+            reads.extend([old_read, new_read].into_iter().flatten());
         }
         reads
     }

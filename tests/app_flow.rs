@@ -4318,9 +4318,17 @@ fn the_worker_coalesces_queued_jobs_keeping_their_flags() {
     let mut newer = input.clone();
     newer.scope = Scope::Branch;
     // Both jobs queue before the worker starts, so the coalescing path is deterministic.
-    job_tx.send(WorldJob { generation: 1, input, sample_turn: true, reveal: false }).unwrap();
     job_tx
-        .send(WorldJob { generation: 2, input: newer, sample_turn: false, reveal: true })
+        .send(WorldJob { generation: 1, input, sample_turn: true, reveal: false, open: None })
+        .unwrap();
+    job_tx
+        .send(WorldJob {
+            generation: 2,
+            input: newer,
+            sample_turn: false,
+            reveal: true,
+            open: None,
+        })
         .unwrap();
     let worker = world::spawn(
         TurnHost::open(dir.path().to_path_buf(), herdr_reviewr::vcs::VcsKind::Git),

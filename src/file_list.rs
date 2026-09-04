@@ -63,6 +63,37 @@ pub struct Entry {
     pub is_dir: bool,
 }
 
+/// One side's read: the `(revision, path)` a command would run for, or `None` where none runs.
+pub type SideRead = Option<(String, String)>;
+
+/// The two reads the diff build makes for `path` at the revisions `old_rev` and `new_rev`,
+/// old then new.
+///
+/// A rename reads its old side from the source path. An added or untracked file has no old
+/// side, and a deleted one has no new side, so reading there would spawn a command to be told
+/// what this list already said, half a second in a Sapling monorepo (`specs/sapling.md`
+/// Reads). A `None` revision is a side the worktree answers, which is a file read.
+///
+/// One derivation for the diff build, the neighbour warm, and the world worker's preload, so
+/// none of them can fill or await a key another will not ask for.
+pub fn side_reads(
+    entries: &[Entry],
+    path: &str,
+    previous_path: Option<&str>,
+    old_rev: Option<&str>,
+    new_rev: Option<&str>,
+) -> (SideRead, SideRead) {
+    // A path this list does not carry reads both sides: nothing said otherwise.
+    let listed = entries.iter().find(|e| e.path == path);
+    let change = listed.and_then(|e| e.annotation.as_ref()).map(|a| a.change);
+    let has_old = !matches!(change, Some(ChangeKind::Added | ChangeKind::Untracked));
+    let has_new = !matches!(change, Some(ChangeKind::Deleted));
+    let read = |rev: Option<&str>, path: &str, present: bool| {
+        rev.filter(|_| present).map(|r| (r.to_string(), path.to_string()))
+    };
+    (read(old_rev, previous_path.unwrap_or(path), has_old), read(new_rev, path, has_new))
+}
+
 impl Entry {
     /// A `Changes` entry from a changed file: annotated and rename-aware.
     pub fn from_changed(f: &ChangedFile) -> Self {

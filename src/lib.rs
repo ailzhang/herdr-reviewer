@@ -934,6 +934,7 @@ fn event_loop(
                     input: app.world_input(),
                     sample_turn: request.sample_turn,
                     reveal: request.reveal,
+                    open: app.diff_path.clone(),
                 };
                 // A sample-only job (the `PR` tab's poll) builds no snapshot: it neither
                 // lights the file tabs' glyph nor deserves the tight landing wake.

@@ -293,6 +293,42 @@ fn a_side_the_file_list_calls_absent_is_never_read() {
 }
 
 #[test]
+fn the_worker_reads_the_open_files_sides_before_handing_the_snapshot_over() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "base\n");
+    r.commit_all("base");
+    r.write("a.txt", "edited\n");
+    r.commit_all("under review");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.parent();
+    let parent = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    let input = app.world_input();
+    let snapshot = herdr_reviewr::world::build(&input).unwrap();
+
+    // An `sl amend` moves the far end under the file on screen, so the landing's diff rebuild
+    // misses the content cache on both sides. The worker reads them at the revisions this very
+    // build resolved, so the frame that lands the snapshot finds them there instead of paying
+    // `sl cat` on the frame loop (`specs/sapling.md` Reads).
+    assert_eq!(
+        herdr_reviewr::world::open_reads(&input, &snapshot, "a.txt"),
+        vec![(parent.clone(), "a.txt".to_string()), (node.clone(), "a.txt".to_string())],
+        "both sides of the open file, old first"
+    );
+
+    // `All files` opens whole-file content, which has no two sides to resolve.
+    app.tab = herdr_reviewr::app::Tab::AllFiles;
+    let all = app.world_input();
+    assert!(
+        herdr_reviewr::world::open_reads(&all, &snapshot, "a.txt").is_empty(),
+        "no preload off the Changes tab"
+    );
+}
+
+#[test]
 fn a_failed_ancestor_query_fails_the_branch_build() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");
