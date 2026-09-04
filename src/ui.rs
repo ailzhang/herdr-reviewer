@@ -2999,19 +2999,40 @@ fn row_shown(row: &crate::app::BaseChoice) -> String {
     match row {
         crate::app::BaseChoice::Rev { name, oid } => git::rev_paint(name, oid).0,
         crate::app::BaseChoice::Branch { name, .. } => name.clone(),
+        // A stack row reads as its description, elided so the `(node)` trail it records
+        // stays on screen (`specs/sapling.md` Scopes).
+        crate::app::BaseChoice::Commit { node, title } => {
+            if title.is_empty() {
+                git::abbreviate_oid(node)
+            } else {
+                truncate_width(title, COMMIT_TITLE_MAX)
+            }
+        }
     }
 }
+
+/// Columns a stack row's description may take before it is elided.
+const COMMIT_TITLE_MAX: usize = 56;
 
 fn base_trail(row: &crate::app::BaseChoice) -> String {
     if row.is_default() {
         return "default".into();
     }
-    let crate::app::BaseChoice::Rev { name, oid } = row else {
-        return String::new();
-    };
-    match git::rev_paint(name, oid).1 {
-        Some(abbrev) => format!("({abbrev})"),
-        None => String::new(),
+    match row {
+        crate::app::BaseChoice::Rev { name, oid } => match git::rev_paint(name, oid).1 {
+            Some(abbrev) => format!("({abbrev})"),
+            None => String::new(),
+        },
+        // The trail abbreviates like every other painted rev, so the `.^` row and the
+        // stack row naming the same commit read as one id (`specs/input.md` Base picker).
+        crate::app::BaseChoice::Commit { node, title } => {
+            if title.is_empty() {
+                String::new()
+            } else {
+                format!("({})", git::abbreviate_oid(node))
+            }
+        }
+        crate::app::BaseChoice::Branch { .. } => String::new(),
     }
 }
 
@@ -3031,10 +3052,17 @@ fn base_picker_popup(area: Rect, app: &App) -> Rect {
         _ => None,
     };
     let widest = bp.rows.iter().chain(hit).map(base_row_width).max().unwrap_or(0);
-    menu_popup(area, app, widest, BASE_PICKER_TITLE, bp.rows.len().max(1) + 3)
+    menu_popup(area, app, widest, base_picker_title(app), bp.rows.len().max(1) + 3)
 }
 
-const BASE_PICKER_TITLE: &str = "Pick base branch";
+/// A Sapling repository has no branches, so its picker names commits
+/// (`specs/sapling.md` Scopes).
+fn base_picker_title(app: &App) -> &'static str {
+    match app.vcs {
+        crate::vcs::VcsKind::Git => "Pick base branch",
+        crate::vcs::VcsKind::Sapling => "Pick base commit",
+    }
+}
 
 fn base_picker_scroll(bp: &crate::app::BasePicker, rows: usize) -> usize {
     menu_scroll(bp.cursor, bp.visible().len(), rows)
@@ -3048,7 +3076,7 @@ fn render_base_picker(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.purple))
-        .title(framed_title(BASE_PICKER_TITLE));
+        .title(framed_title(base_picker_title(app)));
     let inner = picker_inner(popup);
     frame.render_widget(block, popup);
     if inner.height == 0 {
@@ -3074,7 +3102,10 @@ fn render_base_picker(frame: &mut Frame, app: &App, area: Rect) {
         let msg = if bp.query.is_empty() {
             " type a revision"
         } else if matches!(bp.probe, crate::app::BaseProbe::Miss) {
-            " no branches match"
+            match app.vcs {
+                crate::vcs::VcsKind::Git => " no branches match",
+                crate::vcs::VcsKind::Sapling => " no commits match",
+            }
         } else {
             return;
         };

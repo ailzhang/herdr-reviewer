@@ -399,6 +399,46 @@ pub fn list_bookmarks(root: &Path) -> Result<Vec<String>, GitFail> {
         .collect())
 }
 
+/// One stack commit offered by the base picker: the short node it records, and the
+/// description's first line it reads as (`specs/sapling.md` Scopes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackCommit {
+    pub node: String,
+    pub title: String,
+}
+
+/// The draft ancestors of `.`, newest first, for the base picker (`specs/sapling.md`
+/// Scopes). The working-copy parent is dropped: basing on it shows what `uncommitted`
+/// shows. Scanning the stack rather than the repository's whole draft set keeps this
+/// O(stack) (`SL-SCALE-CHANGED`).
+pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
+    let args = ["log", "-r", "sort(draft() & ::., -rev)", "-T", "{node|short}\t{desc|firstline}\n"];
+    let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
+    if !out.status.success() {
+        return Err(GitFail(format!(
+            "sl {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let parent = parent_rev(root);
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (node, title) = line.split_once('\t')?;
+            let node = node.trim();
+            if node.is_empty() {
+                return None;
+            }
+            let parent_row =
+                parent.as_deref().is_some_and(|p| p.starts_with(node) || node.starts_with(p));
+            if parent_row {
+                return None;
+            }
+            Some(StackCommit { node: node.to_string(), title: title.trim().to_string() })
+        })
+        .collect())
+}
+
 // --- file content -------------------------------------------------------------------
 
 /// The content of `path` at `rev`, empty when absent there. `rev` is `.`, a pinned

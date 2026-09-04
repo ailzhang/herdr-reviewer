@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-08-21
-Last edited: 2026-08-21
+Last edited: 2026-09-03
 ---
 
 # Sapling repositories
@@ -81,7 +81,15 @@ branch); only the sources adapt:
 - The pick is one revision spelling per worktree, stored in the snapshot store. Sapling
   worktrees share no store reviewr may write, so the pick is per-worktree, not per-repository.
 - An empty `public()` answer is a no-base state, never an error.
-- The base picker lists local bookmarks. A typed spelling resolves through `sl log -r`.
+- The base picker lists `.^` first, then the local bookmarks, then the draft ancestors of `.`,
+  newest first. A typed spelling resolves through `sl log -r`.
+- `.^` is the row that reviews the latest commit. It records the spelling, so it still names the
+  latest commit after the next one lands (`review-model.md`).
+- The working-copy parent is not a row. Basing on it shows what the `uncommitted` scope shows.
+- A commit row reads as its description's first line and is marked with the short hash it
+  records. The filter matches the description and the hash.
+- The picker names commits, not branches: its title is `Pick base commit` and a filter matching
+  no row says `no commits match`.
 - A hex-shaped spelling resolves as a hash prefix, never as a local revision number —
   bare in a revset, `123456` names a decade-old commit.
 - A spelling whose prefix has gone ambiguous is skipped, exactly as an unknown one.
@@ -95,7 +103,8 @@ and parses stdout only. The enumerator is `sl status -Tjson -C`: JSON rather tha
 copy-source lines, `--copies` so a rename diffs real content. The parent pin is `sl whereami`,
 first line, because it answers in milliseconds where `sl log` pays command dispatch. Content at
 a revision is `sl cat -r`; exit 1 is absence, read as empty content. Counts for `uncommitted`
-and `branch` parse one `sl diff --git` per build.
+and `branch` parse one `sl diff --git` per build. The base picker's commit rows are one
+`sl log -r` over the draft ancestors of `.`, never over the repository's whole draft set.
 
 | status code   | changed-file kind                          |
 | ------------- | ------------------------------------------ |
@@ -138,6 +147,7 @@ paints a calm one-line state, never an error.
 
 - [overview](./overview.md)
 - [review-model](./review-model.md)
+- [input](./input.md)
 - [herdr-host](./herdr-host.md)
 - [file-list](./file-list.md)
 - [search](./search.md)

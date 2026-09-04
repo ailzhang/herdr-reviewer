@@ -166,6 +166,15 @@ pub fn list_branches(
     }
 }
 
+/// The stack commits the base picker lists below the names. A git repository lists
+/// none: recent commits are typed, not offered (`specs/input.md` Non-goals).
+pub fn list_stack(kind: VcsKind, root: &Path) -> Result<Vec<sl::StackCommit>, GitFail> {
+    match kind {
+        VcsKind::Git => Ok(Vec::new()),
+        VcsKind::Sapling => sl::list_stack(root),
+    }
+}
+
 /// Record a typed pick's SHA spelling: git completes a unique prefix to the
 /// abbreviation, Sapling keeps the spelling as typed — a 7-hex prefix is routinely
 /// ambiguous in a monorepo, and an ambiguous pick would go dormant

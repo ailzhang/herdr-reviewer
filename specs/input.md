@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-08-19
+Last edited: 2026-09-03
 ---
 
 # Input
@@ -256,7 +256,7 @@ Only the unmodified `enter` sends. `Alt+Enter` and `Shift+Enter` insert a newlin
 
 ### Base picker
 
-`base-pick` opens the picker over the body, like the comments list (`tui.md`). It works on the file tabs while the `branch` scope is active and no `--base` flag was passed. Elsewhere it is inert and stays out of the footer. While the comment editor is open, the base-name click is inert like the key. The picker still lists branches. It also opens when that list is empty, so a revision can be typed.
+`base-pick` opens the picker over the body, like the comments list (`tui.md`). It works on the file tabs while the `branch` scope is active and no `--base` flag was passed. Elsewhere it is inert and stays out of the footer. While the comment editor is open, the base-name click is inert like the key. The picker still lists branches, or in a Sapling repository the stack (`sapling.md`). It also opens when that list is empty, so a revision can be typed.
 
 The list holds one row per branch name, remote-tracking and local names merged. The checked-out branch is not listed, unless it is the default branch, whose row must stay reachable to clear a pick. Rows sort by most recent commit. Two rows outrank that order:
 
@@ -293,7 +293,7 @@ The filter is a text field with the comment editor's controls, above. `↑` and 
 - No multi-key sequence bindings. A binding is one key, alone or with a `ctrl+`/`alt+` prefix.
 - No `down` / `up` crossing at a file's edges. The line cursor clamps there.
 - The `?` expansion omits the navigator-resize keys, the half-page keys, and the `expand` / `collapse` keys. Resizing is a divider drag first, and the fold and scroll meanings are contextual row-1 actions.
-- The base picker does not list tags, reflog entries, or recent commits. A revision that is not a branch is named by typing it.
+- In a git repository the base picker does not list tags, reflog entries, or recent commits. A revision that is not a branch is named by typing it. A Sapling repository has no branches, so there the picker lists the stack (`sapling.md`).
 
 ## Related specs
 
@@ -305,3 +305,4 @@ The filter is a text field with the comment editor's controls, above. `↑` and 
 - [search](./search.md)
 - [find-in-file](./find-in-file.md)
 - [text-selection](./text-selection.md)
+- [sapling](./sapling.md)

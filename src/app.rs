@@ -154,8 +154,21 @@ pub enum BaseProbe {
 /// One base picker row (`specs/input.md` Base picker).
 #[derive(Clone, Debug)]
 pub enum BaseChoice {
-    Branch { name: String, starred: bool, is_default: bool },
-    Rev { name: String, oid: String },
+    Branch {
+        name: String,
+        starred: bool,
+        is_default: bool,
+    },
+    Rev {
+        name: String,
+        oid: String,
+    },
+    /// A Sapling stack commit: it reads as `title` and records `node`
+    /// (`specs/sapling.md` Scopes).
+    Commit {
+        node: String,
+        title: String,
+    },
 }
 
 impl BaseChoice {
@@ -163,6 +176,17 @@ impl BaseChoice {
     pub fn name(&self) -> &str {
         match self {
             Self::Branch { name, .. } | Self::Rev { name, .. } => name,
+            Self::Commit { node, .. } => node,
+        }
+    }
+
+    /// What the filter matches: the name, plus a commit row's description
+    /// (`specs/sapling.md` Scopes).
+    #[must_use]
+    pub fn haystack(&self) -> String {
+        match self {
+            Self::Commit { node, title } => format!("{title} {node}"),
+            other => other.name().to_string(),
         }
     }
 
@@ -180,6 +204,7 @@ impl BaseChoice {
     pub fn oid(&self) -> Option<&str> {
         match self {
             Self::Rev { oid, .. } => Some(oid),
+            Self::Commit { node, .. } => Some(node),
             Self::Branch { .. } => None,
         }
     }
@@ -190,7 +215,9 @@ impl BasePicker {
     /// anywhere in the name (`specs/input.md` Base picker).
     pub fn filtered(&self) -> Vec<usize> {
         let q = self.query.to_lowercase();
-        (0..self.rows.len()).filter(|&i| self.rows[i].name().to_lowercase().contains(&q)).collect()
+        (0..self.rows.len())
+            .filter(|&i| self.rows[i].haystack().to_lowercase().contains(&q))
+            .collect()
     }
 
     /// The on-screen rows: a live probe hit, else the frozen matches (`specs/input.md`).
@@ -4112,7 +4139,8 @@ impl App {
     /// the default branch next, the rest by commit recency (`specs/input.md` Base picker).
     /// A current non-branch pick is inserted as a row. The highlight opens on the current
     /// base, else the first row. Still opens when that list is empty, so a revision can
-    /// be typed.
+    /// be typed. A Sapling repository adds `.^` above the bookmarks and its stack below
+    /// them (`specs/sapling.md` Scopes).
     pub fn open_base_picker(&mut self) {
         if !self.base_pick_available() || self.mode != Mode::Normal {
             return;
@@ -4139,6 +4167,25 @@ impl App {
             .collect();
         // A stable sort, so recency still orders the promoted pair and the rest alike.
         rows.sort_by_key(|r| (!r.starred(), !r.is_default()));
+        if self.vcs == crate::vcs::VcsKind::Sapling {
+            match crate::vcs::list_stack(self.vcs, &self.repo) {
+                Ok(stack) => rows.extend(
+                    stack.into_iter().map(|c| BaseChoice::Commit { node: c.node, title: c.title }),
+                ),
+                Err(e) => {
+                    self.status = e.0;
+                    return;
+                }
+            }
+            // `.^` leads: it records the spelling, so it still names the latest commit
+            // after the next one lands (`specs/sapling.md` Scopes). A repository with no
+            // parent to name simply has no such row.
+            if let Ok(Some(git::ResolvedBase::Rev { spelling, oid })) =
+                crate::vcs::resolve_spelling(self.vcs, &self.repo, ".^")
+            {
+                rows.insert(0, BaseChoice::Rev { name: spelling, oid });
+            }
+        }
         if let Some(git::ResolvedBase::Rev { spelling, oid }) = &self.branch_base.winner
             && !rows.iter().any(|r| r.name() == spelling)
         {

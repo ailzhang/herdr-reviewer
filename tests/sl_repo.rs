@@ -261,6 +261,67 @@ fn a_turn_snapshot_promotes_and_diffs_against_the_store() {
 }
 
 #[test]
+fn the_stack_lists_draft_ancestors_newest_first_without_the_parent() {
+    let r = sl_repo_or_skip!();
+    for msg in ["first commit", "second commit", "third commit"] {
+        r.write("a.txt", &format!("{msg}\n"));
+        r.commit_all(msg);
+    }
+    let stack = vcs::list_stack(VcsKind::Sapling, &r.root()).unwrap();
+    // The working-copy parent is not a row: basing on it shows what `uncommitted` shows.
+    assert_eq!(
+        stack.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+        ["second commit", "first commit"]
+    );
+    let parent = r.parent();
+    assert!(stack.iter().all(|c| !parent.starts_with(&c.node)));
+    // A git repository offers no stack rows; a recent commit is typed there.
+    assert!(vcs::list_stack(VcsKind::Git, &r.root()).unwrap().is_empty());
+}
+
+#[test]
+fn the_base_picker_leads_with_dot_caret_and_picks_a_stack_commit_by_description() {
+    let r = sl_repo_or_skip!();
+    for msg in ["first commit", "second commit", "third commit"] {
+        r.write("a.txt", &format!("{msg}\n"));
+        r.commit_all(msg);
+    }
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    app.open_base_picker();
+
+    let bp = app.base_picker.as_ref().expect("the picker opens");
+    assert_eq!(bp.rows[0].name(), ".^", "`.^` leads, so the latest commit is one Enter away");
+    let titles: Vec<&str> = bp
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            herdr_reviewr::app::BaseChoice::Commit { title, .. } => Some(title.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(titles, ["second commit", "first commit"]);
+
+    // The filter matches the description, not only the hash.
+    let bp = app.base_picker.as_mut().unwrap();
+    bp.query = "second".into();
+    bp.caret = bp.query.chars().count();
+    bp.cursor = 0;
+    let picked = match app.base_picker.as_ref().unwrap().visible().as_slice() {
+        [one] => (*one).clone(),
+        other => panic!("one row matches `second`, got {}", other.len()),
+    };
+    app.base_picker_pick().unwrap();
+    assert_eq!(
+        app.branch_base.winner.as_ref().map(herdr_reviewr::git::ResolvedBase::name),
+        Some(picked.name()),
+        "the pick records the short node, not the description"
+    );
+}
+
+#[test]
 fn the_app_opens_a_sapling_repo_and_lists_its_changes() {
     let r = sl_repo_or_skip!();
     r.write("src/a.rs", "fn a() {}\n");
