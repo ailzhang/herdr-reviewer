@@ -475,7 +475,7 @@ fn an_uncommitted_send_names_no_commit_even_while_a_pick_stands() {
 }
 
 #[test]
-fn the_stack_lists_the_working_copy_parent_and_its_draft_ancestors() {
+fn the_stack_lists_the_draft_commits_connected_to_the_working_copy() {
     let r = sl_repo_or_skip!();
     stacked_repo(&r);
     let stack = vcs::list_stack(VcsKind::Sapling, &r.root()).unwrap();
@@ -487,6 +487,15 @@ fn the_stack_lists_the_working_copy_parent_and_its_draft_ancestors() {
     assert!(r.parent().starts_with(&stack[0].node));
     // A git repository offers no stack rows; a recent commit is typed there.
     assert!(vcs::list_stack(VcsKind::Git, &r.root()).unwrap().is_empty());
+
+    // `sl prev` to amend a lower commit is the review loop; the commits above stay offered.
+    r.sl(&["goto", "-q", ".^"]);
+    let stack = vcs::list_stack(VcsKind::Sapling, &r.root()).unwrap();
+    assert_eq!(
+        stack.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
+        ["third commit", "second commit", "first commit"],
+        "the draft descendants of `.` are still commits to review"
+    );
 }
 
 #[test]

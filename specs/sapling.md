@@ -87,8 +87,9 @@ branch); only the sources adapt:
   ends at the working copy names the base alone, as a git repository does (`tui.md`).
 - The pinned far end's description follows the nodes, `vs f01c3d2 → 2eb84b9 · fix the thing`, and a
   header too narrow for all of it drops the description before the nodes.
-- The base picker lists `whole stack` first, then the local bookmarks, then `.` and its draft
-  ancestors, newest first. A typed spelling resolves through `sl log -r`.
+- The base picker lists `whole stack` first, then the local bookmarks, then the draft commits
+  connected to `.`, newest first. Connected runs both ways, so a `sl prev` down the stack still
+  offers the commits above. A typed spelling resolves through `sl log -r`.
 - Picking a commit row reviews that commit alone, against its own parent. No merge base stands
   between the two: the range's ends are the commit and its parent, whatever `.` has become.
 - A picked commit resolves through its successors, so an `amend` or a `rebase` moves the review
@@ -119,7 +120,7 @@ copy-source lines, `--copies` so a rename diffs real content. The parent pin is 
 first line, because it answers in milliseconds where `sl log` pays command dispatch. Content at
 a revision is `sl cat -r`; exit 1 is absence, read as empty content. Counts for `uncommitted`
 and `branch` parse one `sl diff --git` per build. The base picker's commit rows are one
-`sl log -r` over the draft ancestors of `.`, never over the repository's whole draft set.
+`sl log -r` over the draft commits connected to `.`, never over the repository's whole draft set.
 
 | status code | changed-file kind                                    |
 | ----------- | ---------------------------------------------------- |

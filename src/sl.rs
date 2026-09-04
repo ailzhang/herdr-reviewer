@@ -534,11 +534,13 @@ pub struct StackCommit {
     pub title: String,
 }
 
-/// `.` and its draft ancestors, newest first, for the base picker (`specs/sapling.md`
-/// Scopes). Scanning the stack rather than the repository's whole draft set keeps this
-/// O(stack) (`SL-SCALE-CHANGED`).
+/// The draft commits connected to `.`, newest first, for the base picker
+/// (`specs/sapling.md` Scopes). Both directions: `sl prev` down the stack to amend a
+/// commit is the review loop itself, and an ancestors-only walk would drop every commit
+/// the reviewer just came from. Draft-only keeps this O(stack) (`SL-SCALE-CHANGED`).
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
-    let args = ["log", "-r", "sort(draft() & ::., -rev)", "-T", "{node|short}\t{desc|firstline}\n"];
+    let revset = "sort(draft() & ((::.) + (.::)), -rev)";
+    let args = ["log", "-r", revset, "-T", "{node|short}\t{desc|firstline}\n"];
     let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
     if !out.status.success() {
         return Err(GitFail(format!(
