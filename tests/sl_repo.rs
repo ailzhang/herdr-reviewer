@@ -552,6 +552,43 @@ fn the_stack_offers_the_live_successor_of_an_obsolete_working_copy_parent() {
 }
 
 #[test]
+fn the_public_base_gets_no_row_of_its_own_but_a_pick_naming_it_does() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("first commit");
+    let public = r.parent();
+    r.sl(&["debugmakepublic", "-r", &public]);
+    r.write("b.txt", "two\n");
+    r.commit_all("second commit");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+
+    // No pick: the chain falls back to the public base, which `whole stack` already
+    // selects. A row for it would sit under the cursor and pin today's node.
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    app.open_base_picker();
+    let bp = app.base_picker.as_ref().expect("the picker opens");
+    assert!(bp.rows[0].is_default(), "the whole-stack row leads; got {:?}", bp.rows);
+    assert_eq!(bp.cursor, 0, "Enter on open selects the state the pane is already in");
+    assert!(
+        !bp.rows.iter().any(|row| public.starts_with(row.name())),
+        "the fallback public base is nobody's row; got {:?}",
+        bp.rows
+    );
+
+    // The same spelling, recorded as a pick, is the reviewer's own choice and keeps
+    // its row. Only the store tells the two apart.
+    vcs::write_base_pick(VcsKind::Sapling, &root, &public).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    app.open_base_picker();
+    let bp = app.base_picker.as_ref().expect("the picker opens");
+    assert_eq!(bp.rows[0].name(), public, "a recorded pick keeps its row; got {:?}", bp.rows);
+    assert_eq!(bp.cursor, 0, "the highlight opens on the standing pick");
+}
+
+#[test]
 fn a_changed_binary_costs_no_payload_and_leaves_its_neighbour_alone() {
     let r = sl_repo_or_skip!();
     // A blob whose git-mode payload dwarfs the rest of the diff, so a build that reads it

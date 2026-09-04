@@ -220,6 +220,24 @@ pub fn write_base_pick(kind: VcsKind, root: &Path, name: &str) -> Result<(), Git
     }
 }
 
+/// Whether `spelling` won the base chain as the chain's own fallback rather than as a
+/// recorded pick. The base picker offers a row for a pick no list row names, and never
+/// for the fallback, which the default row already selects (`specs/sapling.md` Scopes).
+///
+/// Git's fallback is a branch, so a rev winner there is always a pick and the answer
+/// needs no read. Sapling's fallback is the public base, a rev like any pinned one, so it
+/// reads the store. That read is a file, never a spawn. A failed read answers `false`,
+/// keeping the row rather than hiding the reviewer's own pick.
+pub fn base_is_chain_fallback(kind: VcsKind, root: &Path, spelling: &str) -> bool {
+    match kind {
+        VcsKind::Git => false,
+        VcsKind::Sapling => match sl::Store::open(root).read_base_pick() {
+            Ok(pick) => pick.is_none_or(|p| p.base != spelling),
+            Err(_) => false,
+        },
+    }
+}
+
 /// Drop the recorded pick (`specs/review-model.md` Base branch).
 pub fn clear_base_pick(kind: VcsKind, root: &Path) -> Result<(), GitFail> {
     match kind {

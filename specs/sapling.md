@@ -92,6 +92,8 @@ branch); only the sources adapt:
 - The base picker lists `whole stack` first, then the local bookmarks, then the draft commits
   connected to `.`, newest first. Connected runs both ways, so a `sl prev` down the stack still
   offers the commits above. A typed spelling resolves through `sl log -r`.
+- The public base gets no row of its own. It is what `whole stack` selects, and a second row
+  naming it would pin the node it resolves to today.
 - A stack row resolves through its successors, so a working copy parked on an obsolete commit
   offers the node that replaced it. A successor that landed is public, and its row goes with it.
 - Picking a commit row reviews that commit alone, against its own parent. No merge base stands
@@ -106,8 +108,7 @@ branch); only the sources adapt:
 - A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
   restart. The pick skips whole when its commit has no live successor, and when that
   successor is a root commit with no parent to diff against.
-- A dormant pick names a node abbreviated, `2eb84b9 missing`, and a bookmark name whole. The
-  recorded spelling is all 40 hex digits, which would fill the header.
+- A dormant pick names a node abbreviated, `2eb84b9 missing`, and a bookmark name whole.
 - A commit row reads as its description's first line. It is marked with its code review
   number, and with the short hash it records when it carries no number. The filter matches
   the description, the hash, and the number.

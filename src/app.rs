@@ -4228,10 +4228,13 @@ impl App {
             rows.insert(0, BaseChoice::Stack);
         }
         // A pinned far end is already a commit row, and its base is that commit's parent —
-        // a row for the parent would offer a range nobody picked.
+        // a row for the parent would offer a range nobody picked. Sapling's fallback public
+        // base is a rev too, and a row for it would read like the default while pinning
+        // today's public base under the cursor Enter opens on (`specs/sapling.md` Scopes).
         if let Some(git::ResolvedBase::Rev { spelling, oid }) = &self.branch_base.winner
             && self.branch_tip.is_none()
             && !rows.iter().any(|r| r.name() == spelling)
+            && !crate::vcs::base_is_chain_fallback(self.vcs, &self.repo, spelling)
         {
             rows.insert(0, BaseChoice::Rev { name: spelling.clone(), oid: oid.clone() });
         }
