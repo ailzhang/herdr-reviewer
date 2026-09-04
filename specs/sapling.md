@@ -92,6 +92,8 @@ branch); only the sources adapt:
 - The base picker lists `whole stack` first, then the local bookmarks, then the draft commits
   connected to `.`, newest first. Connected runs both ways, so a `sl prev` down the stack still
   offers the commits above. A typed spelling resolves through `sl log -r`.
+- A stack row resolves through its successors, so a working copy parked on an obsolete commit
+  offers the node that replaced it. A successor that landed is public, and its row goes with it.
 - Picking a commit row reviews that commit alone, against its own parent. No merge base stands
   between the two: the range's ends are the commit and its parent, whatever `.` has become.
 - A picked commit resolves through its successors, so an `amend` or a `rebase` moves the review

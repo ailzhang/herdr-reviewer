@@ -609,8 +609,13 @@ pub struct StackCommit {
 /// (`specs/sapling.md` Scopes). Both directions: `sl prev` down the stack to amend a
 /// commit is the review loop itself, and an ancestors-only walk would drop every commit
 /// the reviewer just came from. Draft-only keeps this O(stack) (`SL-SCALE-CHANGED`).
+///
+/// Each commit resolves through its successors, so a working copy left on an obsolete
+/// commit lists the node that replaced it, never the node it sits on. A successor that
+/// landed is public, so `& draft()` drops the row rather than offering a commit that is no
+/// longer in anyone's stack.
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
-    let revset = "sort(draft() & ((::.) + (.::)), -rev)";
+    let revset = "sort((successors(draft() & ((::.) + (.::))) & draft()) - obsolete(), -rev)";
     // The review number rides the same template, so the picker still costs one spawn.
     let args = ["log", "-r", revset, "-T", "{node|short}\t{phabdiff}\t{desc|firstline}\n"];
     let out = sl_out(root, &args).map_err(|e| GitFail(format!("{}: {e}", cmdline(&args))))?;

@@ -521,6 +521,37 @@ fn the_stack_lists_the_draft_commits_connected_to_the_working_copy() {
 }
 
 #[test]
+fn the_stack_offers_the_live_successor_of_an_obsolete_working_copy_parent() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("first commit");
+    r.write("b.txt", "two\n");
+    r.commit_all("second commit");
+    let stale = r.parent();
+
+    // The amend that leaves the working copy behind. It happens whenever the commit under
+    // `.` is rewritten from elsewhere, and `sl` lets the reviewer sit on the dead node.
+    r.write("b.txt", "two, amended\n");
+    r.sl(&["amend"]);
+    let live = r.parent();
+    assert_ne!(live, stale);
+    r.sl(&["unhide", &stale]);
+    r.sl(&["goto", "-q", "--clean", &stale]);
+    assert_eq!(r.parent(), stale, "the working copy is parked on the obsolete commit");
+
+    let stack = vcs::list_stack(VcsKind::Sapling, &r.root()).unwrap();
+    let nodes = stack.iter().map(|c| c.node.as_str()).collect::<Vec<_>>();
+    assert!(
+        nodes.iter().any(|n| live.starts_with(n)),
+        "the row names the commit that replaced the dead one; got {nodes:?}"
+    );
+    assert!(
+        !nodes.iter().any(|n| stale.starts_with(n)),
+        "the dead node is never offered as a commit to review; got {nodes:?}"
+    );
+}
+
+#[test]
 fn the_base_picker_leads_with_whole_stack_and_picks_a_commit_by_description() {
     let r = sl_repo_or_skip!();
     stacked_repo(&r);
