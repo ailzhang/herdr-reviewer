@@ -854,6 +854,16 @@ pub fn warm_content(root: &Path, rev: &str, path: &str) {
     let _ = warm_queue().try_send((root.to_path_buf(), rev.to_string(), path.to_string()));
 }
 
+/// Whether the content cache already holds `path` at `rev`, without reading or ranking it. The
+/// warm queue is fire and forget, so this is the only way to see that a queued read landed
+/// rather than to time a foreground one, which a loaded machine makes a coin flip.
+///
+/// `rev` is the resolved node. A moving spelling is pinned before the cache, so `.` is never a
+/// key ([`file_content`]).
+pub fn content_is_cached(rev: &str, path: &str) -> bool {
+    cat_cache().lock().unwrap().contains_key(&(rev.to_string(), path.to_string()))
+}
+
 /// `sl cat -r <rev> <path>` through the immutable-content cache: a commit's file
 /// content never changes, so a hit can never be stale, and the frame loop's old-side
 /// reads skip the command-dispatch floor after the first. Exit 1 is absence

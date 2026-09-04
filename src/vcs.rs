@@ -141,6 +141,15 @@ pub fn warm_content(kind: VcsKind, root: &Path, rev: &str, path: &str) {
     }
 }
 
+/// Whether a warm or preload has already landed `path` at `rev` in the backend's content cache.
+/// Git caches nothing, so it is never holding anything ([`warm_content`]).
+pub fn content_is_cached(kind: VcsKind, rev: &str, path: &str) -> bool {
+    match kind {
+        VcsKind::Git => false,
+        VcsKind::Sapling => sl::content_is_cached(rev, path),
+    }
+}
+
 /// Read one file into the backend's content cache and wait for it. The world worker calls
 /// this before handing over a snapshot that moved the revisions under the open file, so the
 /// landing frame finds a cache hit where it would otherwise spawn `sl cat`. Git warms

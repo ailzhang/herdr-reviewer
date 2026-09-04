@@ -217,15 +217,19 @@ fn a_neighbours_old_side_reads_ahead_of_the_reviewer() {
     r.write("a.txt", "one\n");
     r.commit_all("base");
     let (root, rev) = (r.root(), r.parent());
+    assert!(!vcs::content_is_cached(VcsKind::Sapling, &rev, "a.txt"), "nothing has read it yet");
+
+    // `sl cat` costs ~180ms in a repo this size and a third of a second in a monorepo. The read
+    // runs off the frame loop, so by the time the cursor lands the content is already there.
     vcs::warm_content(VcsKind::Sapling, &root, &rev, "a.txt");
-    // `sl cat` costs ~180ms in a repo this size and a third of a second in a monorepo. The
-    // read runs off the frame loop, so by the time the cursor lands the content is there.
-    std::thread::sleep(Duration::from_millis(700));
-    let started = Instant::now();
-    let got = vcs::file_content(VcsKind::Sapling, &root, &rev, "a.txt");
-    let took = started.elapsed();
-    assert_eq!(got, "one\n");
-    assert!(took < Duration::from_millis(20), "the old side was not warmed: {took:?}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !vcs::content_is_cached(VcsKind::Sapling, &rev, "a.txt") {
+        assert!(Instant::now() < deadline, "the warm never landed");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Asking the cache, not timing a read: a loaded machine makes a latency threshold a coin
+    // flip, and this suite runs `sl` in parallel with itself.
+    assert_eq!(vcs::file_content(VcsKind::Sapling, &root, &rev, "a.txt"), "one\n");
 }
 
 #[test]
@@ -289,6 +293,30 @@ fn a_side_the_file_list_calls_absent_is_never_read() {
         app.warm_targets(),
         vec![(node.clone(), "b.txt".to_string()), (parent.clone(), "c.txt".to_string())],
         "the added file reads its new side alone, the deleted file its old side alone"
+    );
+}
+
+#[test]
+fn the_uncommitted_old_side_follows_the_working_copy_parent_across_a_commit() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "v1\n");
+    r.commit_all("base");
+    let root = r.root();
+    let base = vcs::uncommitted_base(VcsKind::Sapling);
+
+    // Reviewing an uncommitted edit reads the old side at the working-copy parent.
+    r.write("a.txt", "v2\n");
+    assert_eq!(vcs::file_content(VcsKind::Sapling, &root, base, "a.txt"), "v1\n");
+
+    // The agent commits and edits again, so the same spelling names a different commit. The
+    // content cache holds immutable answers, and a moving spelling has none, so caching one
+    // would diff the new edit against a parent two commits back (`specs/sapling.md` Reads).
+    r.commit_all("agent's work");
+    r.write("a.txt", "v3\n");
+    assert_eq!(
+        vcs::file_content(VcsKind::Sapling, &root, base, "a.txt"),
+        "v2\n",
+        "the parent the working copy has now, never the one it had"
     );
 }
 
