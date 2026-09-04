@@ -69,16 +69,26 @@ pub fn worktree_of(kind: VcsKind, path: &Path) -> Worktree {
     }
 }
 
+/// The `branch` scope's two ends: the resolved base the changeset diffs from, and the
+/// commit its far end sits on. A `None` tip ends the range at the working copy, which is
+/// every git range and every Sapling range but a commit pick (`specs/sapling.md` Scopes).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchEnds {
+    pub base: BaseStatus,
+    pub tip: Option<String>,
+}
+
 /// The changed files for `scope` (`specs/review-model.md` Scopes, `specs/sapling.md`).
 pub fn changed_files(
     kind: VcsKind,
     root: &Path,
     scope: Scope,
     branch_base: Option<&str>,
+    branch_tip: Option<&str>,
 ) -> Result<Vec<ChangedFile>> {
     match kind {
         VcsKind::Git => git::changed_files(root, scope, branch_base),
-        VcsKind::Sapling => sl::changed_files(root, scope, branch_base),
+        VcsKind::Sapling => sl::changed_files(root, scope, branch_base, branch_tip),
     }
 }
 
@@ -110,16 +120,6 @@ pub fn uncommitted_base(kind: VcsKind) -> &'static str {
     }
 }
 
-/// The commit the `branch` scope's range ends at, which the header names beside the base.
-/// A git repository has none to paint: its base is a branch name, and the far end is the
-/// reviewer's own branch (`specs/sapling.md` Scopes).
-pub fn branch_tip(kind: VcsKind, root: &Path) -> Option<String> {
-    match kind {
-        VcsKind::Git => None,
-        VcsKind::Sapling => sl::parent_rev(root),
-    }
-}
-
 /// The merge-base commit of the resolved base and the working copy
 /// (`specs/review-model.md` Base branch).
 pub fn merge_base(kind: VcsKind, root: &Path, base_oid: &str) -> Option<String> {
@@ -135,9 +135,11 @@ pub fn resolve_base(
     kind: VcsKind,
     root: &Path,
     base_flag: Option<&str>,
-) -> Result<BaseStatus, GitFail> {
+) -> Result<BranchEnds, GitFail> {
     match kind {
-        VcsKind::Git => git::resolve_base(root, base_flag).map(|r| r.status),
+        VcsKind::Git => {
+            git::resolve_base(root, base_flag).map(|r| BranchEnds { base: r.status, tip: None })
+        }
         VcsKind::Sapling => sl::resolve_base(root, base_flag),
     }
 }
@@ -176,8 +178,9 @@ pub fn list_branches(
     }
 }
 
-/// The stack commits the base picker lists below the names. A git repository lists
-/// none: recent commits are typed, not offered (`specs/input.md` Non-goals).
+/// The stack commits the base picker lists below the names, each a commit to review
+/// rather than a base. A git repository lists none: recent commits are typed, not offered
+/// (`specs/input.md` Non-goals).
 pub fn list_stack(kind: VcsKind, root: &Path) -> Result<Vec<sl::StackCommit>, GitFail> {
     match kind {
         VcsKind::Git => Ok(Vec::new()),

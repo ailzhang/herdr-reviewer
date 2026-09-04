@@ -1368,9 +1368,10 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
     })
 }
 
-/// The base's marker with the range's far end appended, so the base reads as the end it is
-/// rather than as the commit under review (`specs/sapling.md` Scopes). It rides the marker
-/// so the header's truncation keeps or drops the whole range together, never half of it.
+/// The base's marker with the range's far end appended, which a pick naming one commit to
+/// review pins (`specs/sapling.md` Scopes). A range ending at the working copy has no far
+/// end to name. It rides the marker so the header's truncation keeps or drops the whole
+/// range together, never half of it.
 fn branch_tip_mark(app: &App, marker: &str) -> String {
     match &app.branch_tip {
         Some(tip) => format!("{marker} → {}", git::abbreviate_oid(tip)),
@@ -3010,6 +3011,7 @@ fn row_shown(row: &crate::app::BaseChoice) -> String {
     match row {
         crate::app::BaseChoice::Rev { name, oid } => git::rev_paint(name, oid).0,
         crate::app::BaseChoice::Branch { name, .. } => name.clone(),
+        crate::app::BaseChoice::Stack => row.name().to_string(),
         // A stack row reads as its description, elided so the `(node)` trail it records
         // stays on screen (`specs/sapling.md` Scopes).
         crate::app::BaseChoice::Commit { node, title } => {
@@ -3034,8 +3036,8 @@ fn base_trail(row: &crate::app::BaseChoice) -> String {
             Some(abbrev) => format!("({abbrev})"),
             None => String::new(),
         },
-        // The trail abbreviates like every other painted rev, so the `.^` row and the
-        // stack row naming the same commit read as one id (`specs/input.md` Base picker).
+        // The trail abbreviates like every other painted rev, so a commit row and a rev row
+        // naming the same commit read as one id (`specs/input.md` Base picker).
         crate::app::BaseChoice::Commit { node, title } => {
             if title.is_empty() {
                 String::new()
@@ -3043,7 +3045,7 @@ fn base_trail(row: &crate::app::BaseChoice) -> String {
                 format!("({})", git::abbreviate_oid(node))
             }
         }
-        crate::app::BaseChoice::Branch { .. } => String::new(),
+        crate::app::BaseChoice::Branch { .. } | crate::app::BaseChoice::Stack => String::new(),
     }
 }
 

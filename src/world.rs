@@ -43,14 +43,7 @@ pub struct WorldInput {
     pub toggled_dirs: HashSet<String>,
 }
 
-/// The `branch` scope's two endpoints: the resolved base the changeset diffs from, and the
-/// commit its far end sits on. The header names both, so the base reads as one end of a
-/// range rather than as the thing under review (`specs/sapling.md` Scopes).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct BranchEnds {
-    pub base: git::BaseStatus,
-    pub tip: Option<String>,
-}
+pub use crate::vcs::BranchEnds;
 
 /// The derived state one refresh produces: the scope changeset, the navigator entries, and
 /// the `branch` scope's endpoints. They ride the snapshot so the header name and the
@@ -100,25 +93,26 @@ pub fn build_changed(input: &WorldInput) -> Result<(BranchEnds, Vec<ChangedFile>
             Some(t) => Ok((none(), crate::vcs::changed_against_tree(input.vcs, &input.repo, t)?)),
             None => Ok((none(), Vec::new())),
         },
-        Scope::Uncommitted => {
-            Ok((none(), crate::vcs::changed_files(input.vcs, &input.repo, input.scope, None)?))
-        }
+        Scope::Uncommitted => Ok((
+            none(),
+            crate::vcs::changed_files(input.vcs, &input.repo, input.scope, None, None)?,
+        )),
         Scope::Branch => {
             // A resolve failure fails the build whole, so the landing keeps the stale
             // frame and reports — degrading to an empty snapshot would blank a populated
             // view over a transient error (specs/overview.md Continuity). A chain where
             // nothing resolves is not a failure: it returns the legible no-base state.
-            let base = crate::vcs::resolve_base(input.vcs, &input.repo, input.base.as_deref())
+            let ends = crate::vcs::resolve_base(input.vcs, &input.repo, input.base.as_deref())
                 .map_err(|e| anyhow::anyhow!("{}", e.0))?;
-            let base_oid = base.winner.as_ref().map(|w| w.oid().to_string());
+            let base_oid = ends.base.winner.as_ref().map(|w| w.oid().to_string());
             let changed = crate::vcs::changed_files(
                 input.vcs,
                 &input.repo,
                 input.scope,
                 base_oid.as_deref(),
+                ends.tip.as_deref(),
             )?;
-            let tip = crate::vcs::branch_tip(input.vcs, &input.repo);
-            Ok((BranchEnds { base, tip }, changed))
+            Ok((ends, changed))
         }
     }
 }

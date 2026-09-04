@@ -129,7 +129,8 @@ fn uncommitted_scope_lists_kinds_and_counts() {
     r.write("c.txt", "1\n2\n3\n");
     // A plain `rm` (status `!`, never `sl rm`'d) is how agents delete files.
     std::fs::remove_file(r.path().join("d.txt")).unwrap();
-    let files = vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None).unwrap();
+    let files =
+        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None, None).unwrap();
     let by_path = |p: &str| files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{p}"));
     assert_eq!(by_path("a.txt").kind, ChangeKind::Modified);
     assert_eq!((by_path("a.txt").additions, by_path("a.txt").deletions), (1, 0));
@@ -167,7 +168,8 @@ fn a_rename_carries_its_previous_path() {
     r.write("old.txt", "keep this line\n");
     r.commit_all("base");
     r.sl(&["mv", "old.txt", "new.txt"]);
-    let files = vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None).unwrap();
+    let files =
+        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None, None).unwrap();
     let renamed = files.iter().find(|f| f.path == "new.txt").expect("the rename lists");
     assert_eq!(renamed.kind, ChangeKind::Renamed);
     assert_eq!(renamed.previous_path.as_deref(), Some("old.txt"));
@@ -186,10 +188,11 @@ fn branch_scope_diffs_committed_and_dirty_work_against_a_flag_base() {
     r.commit_all("stack commit");
     r.write("b.txt", "b\ndirty edit\n");
     let status = vcs::resolve_base(VcsKind::Sapling, &r.root(), Some(&base)).unwrap();
-    let winner = status.winner.expect("the flag resolves");
+    let winner = status.base.winner.expect("the flag resolves");
     assert_eq!(winner.oid(), base);
     let files =
-        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Branch, Some(winner.oid())).unwrap();
+        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Branch, Some(winner.oid()), None)
+            .unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, ["a.txt", "b.txt"], "committed and dirty changes both list");
     assert!(files.iter().all(|f| f.kind == ChangeKind::Modified));
@@ -202,8 +205,8 @@ fn a_repo_with_no_public_commits_has_no_default_base() {
     r.write("a.txt", "a\n");
     r.commit_all("draft only");
     let status = vcs::resolve_base(VcsKind::Sapling, &r.root(), None).unwrap();
-    assert!(status.winner.is_none(), "an empty public() is a no-base state, not an error");
-    assert!(status.skipped.is_none());
+    assert!(status.base.winner.is_none(), "an empty public() is a no-base state, not an error");
+    assert!(status.base.skipped.is_none());
 }
 
 #[test]
@@ -212,8 +215,8 @@ fn an_unknown_flag_spelling_is_skipped_never_an_error() {
     r.write("a.txt", "a\n");
     r.commit_all("base");
     let status = vcs::resolve_base(VcsKind::Sapling, &r.root(), Some("no-such-name")).unwrap();
-    assert!(status.winner.is_none());
-    assert_eq!(status.skipped.as_deref(), Some("no-such-name"));
+    assert!(status.base.winner.is_none());
+    assert_eq!(status.base.skipped.as_deref(), Some("no-such-name"));
 }
 
 #[test]
@@ -275,54 +278,57 @@ fn a_turn_snapshot_promotes_and_diffs_against_the_store() {
     assert_eq!(vcs::seed_baseline(VcsKind::Sapling, &root), Some(candidate));
 }
 
-#[test]
-fn the_branch_header_names_both_ends_of_the_range() {
-    let r = sl_repo_or_skip!();
-    r.write("a.txt", "1\n");
-    r.commit_all("first commit");
-    r.write("a.txt", "2\n");
-    r.commit_all("second commit");
-    let root = r.root();
-    let _guard = StoreGuard::for_root(&root);
-    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, Some(".^".to_string()));
-    app.reload().unwrap();
-
-    let tip = app.branch_tip.clone().expect("the tip rides the branch build");
-    assert_eq!(tip, r.parent(), "the tip is the working-copy parent");
-    let base = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
-    let want = format!("vs .^ ({}) → {}", &base[..7], &tip[..7]);
-    assert!(
-        painted(&app).contains(&want),
-        "the header names the base and the far end; wanted {want:?}"
-    );
+/// Three commits, each adding one file of its own, plus one uncommitted edit.
+fn stacked_repo(r: &SlRepo) {
+    for msg in ["first commit", "second commit", "third commit"] {
+        r.write(&format!("{}.txt", msg.split(' ').next().unwrap()), "committed\n");
+        r.commit_all(msg);
+    }
+    r.write("dirty.txt", "uncommitted\n");
 }
 
 #[test]
-fn the_stack_lists_draft_ancestors_newest_first_without_the_parent() {
+fn a_commit_pick_reviews_that_commit_against_its_own_parent() {
     let r = sl_repo_or_skip!();
-    for msg in ["first commit", "second commit", "third commit"] {
-        r.write("a.txt", &format!("{msg}\n"));
-        r.commit_all(msg);
-    }
+    stacked_repo(&r);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    // `.^` is the second commit, so the range under review is `second^ → second`.
+    let node = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    let parent = r.sl(&["log", "-r", ".^^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+
+    assert_eq!(app.branch_tip.as_deref(), Some(node.as_str()), "the pick pins the far end");
+    assert_eq!(
+        app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        ["second.txt"],
+        "one commit's own changes: not the commit above it, not the uncommitted edit"
+    );
+    let want = format!("vs {} → {}", &parent[..7], &node[..7]);
+    assert!(painted(&app).contains(&want), "the header names both ends; wanted {want:?}");
+}
+
+#[test]
+fn the_stack_lists_the_working_copy_parent_and_its_draft_ancestors() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
     let stack = vcs::list_stack(VcsKind::Sapling, &r.root()).unwrap();
-    // The working-copy parent is not a row: basing on it shows what `uncommitted` shows.
     assert_eq!(
         stack.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(),
-        ["second commit", "first commit"]
+        ["third commit", "second commit", "first commit"],
+        "newest first, the working-copy parent included: it is a commit to review"
     );
-    let parent = r.parent();
-    assert!(stack.iter().all(|c| !parent.starts_with(&c.node)));
+    assert!(r.parent().starts_with(&stack[0].node));
     // A git repository offers no stack rows; a recent commit is typed there.
     assert!(vcs::list_stack(VcsKind::Git, &r.root()).unwrap().is_empty());
 }
 
 #[test]
-fn the_base_picker_leads_with_dot_caret_and_picks_a_stack_commit_by_description() {
+fn the_base_picker_leads_with_whole_stack_and_picks_a_commit_by_description() {
     let r = sl_repo_or_skip!();
-    for msg in ["first commit", "second commit", "third commit"] {
-        r.write("a.txt", &format!("{msg}\n"));
-        r.commit_all(msg);
-    }
+    stacked_repo(&r);
     let root = r.root();
     let _guard = StoreGuard::for_root(&root);
     let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
@@ -330,7 +336,7 @@ fn the_base_picker_leads_with_dot_caret_and_picks_a_stack_commit_by_description(
     app.open_base_picker();
 
     let bp = app.base_picker.as_ref().expect("the picker opens");
-    assert_eq!(bp.rows[0].name(), ".^", "`.^` leads, so the latest commit is one Enter away");
+    assert!(bp.rows[0].is_default(), "the whole-stack row leads, and picking it clears the pick");
     let titles: Vec<&str> = bp
         .rows
         .iter()
@@ -339,7 +345,7 @@ fn the_base_picker_leads_with_dot_caret_and_picks_a_stack_commit_by_description(
             _ => None,
         })
         .collect();
-    assert_eq!(titles, ["second commit", "first commit"]);
+    assert_eq!(titles, ["third commit", "second commit", "first commit"]);
 
     // The filter matches the description, not only the hash.
     let bp = app.base_picker.as_mut().unwrap();
@@ -350,11 +356,33 @@ fn the_base_picker_leads_with_dot_caret_and_picks_a_stack_commit_by_description(
         [one] => (*one).clone(),
         other => panic!("one row matches `second`, got {}", other.len()),
     };
+    let node = picked.name().to_string();
+    assert_eq!(picked.pick_spelling(), format!("{node}^..{node}"), "the pick records both ends");
     app.base_picker_pick().unwrap();
+    assert!(
+        app.branch_tip.as_deref().is_some_and(|tip| tip.starts_with(&node)),
+        "picking a commit row pins the range's far end to it"
+    );
     assert_eq!(
-        app.branch_base.winner.as_ref().map(herdr_reviewr::git::ResolvedBase::name),
-        Some(picked.name()),
-        "the pick records the short node, not the description"
+        app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        ["second.txt"],
+        "the view is that commit alone"
+    );
+
+    // The whole-stack row is the way back: it clears the pick.
+    app.open_base_picker();
+    let bp = app.base_picker.as_mut().unwrap();
+    assert!(
+        matches!(bp.rows[bp.cursor], herdr_reviewr::app::BaseChoice::Commit { .. }),
+        "the picker reopens on the commit under review"
+    );
+    bp.cursor = 0;
+    app.base_picker_pick().unwrap();
+    assert_eq!(app.branch_tip, None, "no pinned far end: the range ends at the working copy");
+    assert_eq!(
+        herdr_reviewr::sl::Store::open(&root).read_base_pick().unwrap(),
+        None,
+        "the pick is cleared, so the chain falls back to the public base"
     );
 }
 

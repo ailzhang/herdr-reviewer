@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::git::{BaseStatus, GitFail, ResolvedBase, Worktree};
 use crate::model::{ChangeKind, ChangedFile, Scope};
+use crate::vcs::BranchEnds;
 
 /// Run `sl <args>` at `root` and return its raw output.
 fn sl_out(root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -76,12 +77,14 @@ struct StatusEntry {
     copy: Option<String>,
 }
 
-/// The dirty files vs the working-copy parent, or vs `rev` when given. Explicit
-/// `-mardu` rather than the default show set, so a config cannot widen the pass into
-/// the clean-file scan `sl help status` warns about.
-fn status_entries(root: &Path, rev: Option<&str>) -> Result<Vec<StatusEntry>> {
-    let mut args = vec!["status", "-mardu", "-C", "-Tjson"];
-    if let Some(rev) = rev {
+/// The files that differ between `from` and `to`, each defaulting to the working-copy
+/// parent and the working copy. Explicit show flags rather than the default set, so a
+/// config cannot widen the pass into the clean-file scan `sl help status` warns about. A
+/// commit-to-commit range drops the untracked flag: it has no working copy to scan.
+fn status_entries(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<StatusEntry>> {
+    let show = if to.is_some() { "-mard" } else { "-mardu" };
+    let mut args = vec!["status", show, "-C", "-Tjson"];
+    for rev in [from, to].into_iter().flatten() {
         args.extend(["--rev", rev]);
     }
     let out = sl(root, &args)?;
@@ -108,25 +111,32 @@ pub fn changed_files(
     root: &Path,
     scope: Scope,
     branch_base: Option<&str>,
+    branch_tip: Option<&str>,
 ) -> Result<Vec<ChangedFile>> {
     match scope {
-        Scope::Uncommitted => changed_set(root, None),
-        Scope::Branch => match branch_base.and_then(|b| merge_base(root, b)) {
-            Some(mb) => changed_set(root, Some(&mb)),
-            None => Ok(Vec::new()),
+        Scope::Uncommitted => changed_set(root, None, None),
+        Scope::Branch => match (branch_base, branch_tip) {
+            // A pinned far end diffs commit to commit. The base is that commit's own
+            // parent, so no merge base stands between the two (`specs/sapling.md` Scopes).
+            (Some(base), Some(tip)) => changed_set(root, Some(base), Some(tip)),
+            (Some(base), None) => match merge_base(root, base) {
+                Some(mb) => changed_set(root, Some(&mb), None),
+                None => Ok(Vec::new()),
+            },
+            (None, _) => Ok(Vec::new()),
         },
         Scope::LastTurn => Ok(Vec::new()),
     }
 }
 
 /// One scope build: the file list from `sl status`, the counts from one `sl diff`.
-fn changed_set(root: &Path, rev: Option<&str>) -> Result<Vec<ChangedFile>> {
-    let entries = status_entries(root, rev)?;
+fn changed_set(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<ChangedFile>> {
+    let entries = status_entries(root, from, to)?;
     if entries.is_empty() {
         return Ok(Vec::new());
     }
     let mut diff_args = vec!["diff", "--git"];
-    if let Some(rev) = rev {
+    for rev in [from, to].into_iter().flatten() {
         diff_args.extend(["-r", rev]);
     }
     let counts = diff_counts(&sl(root, &diff_args)?);
@@ -147,7 +157,7 @@ fn changed_set(root: &Path, rev: Option<&str>) -> Result<Vec<ChangedFile>> {
             // A plain-`rm` deletion (`!`) never reaches `sl diff` either; count its
             // old side at the scope's base, one cached read per deleted file.
             ChangeKind::Deleted if !counts.contains_key(&entry.path) => {
-                let base = match rev {
+                let base = match from {
                     Some(rev) => Some(rev.to_string()),
                     None => parent_rev(root),
                 };
@@ -250,6 +260,34 @@ fn text_counts(old: &[u8], new: &[u8]) -> (u32, u32) {
 
 // --- revision resolution ------------------------------------------------------------
 
+/// A recorded base pick: where the `branch` range starts, and the commit it ends at when
+/// the pick names one commit to review. The picker records a commit row as
+/// `<node>^..<node>` (`specs/sapling.md` Scopes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pick {
+    pub base: String,
+    pub tip: Option<String>,
+}
+
+impl Pick {
+    /// Read one recorded line. A line with no `..` is a plain base, which is every pick a
+    /// bookmark row, a typed spelling, or an older reviewr wrote.
+    fn parse(line: &str) -> Self {
+        match line.split_once("..") {
+            Some((base, tip)) if !base.is_empty() && !tip.is_empty() => {
+                Self { base: base.to_string(), tip: Some(tip.to_string()) }
+            }
+            _ => Self { base: line.to_string(), tip: None },
+        }
+    }
+
+    /// What the header names when this pick goes dormant: the commit it reviewed, since
+    /// that is the end the reviewer chose (`specs/review-model.md` Base branch).
+    fn label(&self) -> String {
+        self.tip.clone().unwrap_or_else(|| self.base.clone())
+    }
+}
+
 /// Resolve one revision spelling to its full node, `Ok(None)` for a spelling Sapling
 /// does not know — the chain's skip-never-error contract (`specs/review-model.md` Base
 /// branch). `limit(<spelling>, 1)` bounds a typed revset to one answer, so a runaway
@@ -342,36 +380,49 @@ fn ancestor_cache() -> &'static PinnedCache<String> {
 
 /// Resolve the base chain: the `--base` flag, then the worktree pick, then the public
 /// base (`specs/sapling.md` Scopes). Every winner is a `Rev`: Sapling has no
-/// origin-then-local branch walk, and a bookmark spelling paints with its pin.
-pub fn resolve_base(root: &Path, base_flag: Option<&str>) -> Result<BaseStatus, GitFail> {
+/// origin-then-local branch walk, and a bookmark spelling paints with its pin. Only the
+/// pick can pin the range's far end — the flag names a base, exactly as git's does.
+pub fn resolve_base(root: &Path, base_flag: Option<&str>) -> Result<BranchEnds, GitFail> {
+    let ends = |winner, skipped, tip| BranchEnds { base: BaseStatus { winner, skipped }, tip };
     let mut skipped: Option<String> = None;
     if let Some(flag) = base_flag.filter(|f| !f.is_empty()) {
         match resolve_rev(root, flag)? {
             Some(oid) => {
-                return Ok(BaseStatus {
-                    winner: Some(ResolvedBase::Rev { spelling: flag.to_string(), oid }),
-                    skipped: None,
-                });
+                let winner = ResolvedBase::Rev { spelling: flag.to_string(), oid };
+                return Ok(ends(Some(winner), None, None));
             }
             None => skipped = Some(flag.to_string()),
         }
     }
     if let Some(pick) = Store::open(root).read_base_pick()? {
-        match resolve_rev(root, &pick)? {
-            Some(oid) => {
-                return Ok(BaseStatus {
-                    winner: Some(ResolvedBase::Rev { spelling: pick, oid }),
-                    skipped,
-                });
-            }
-            None => skipped = skipped.or(Some(pick)),
+        match resolve_pick(root, &pick)? {
+            Some((winner, tip)) => return Ok(ends(Some(winner), skipped, tip)),
+            None => skipped = skipped.or_else(|| Some(pick.label())),
         }
     }
     // The spelling is the full node, so picking this row records an unambiguous pin —
     // a 7-hex prefix is routinely ambiguous in a monorepo. It still paints abbreviated,
     // since a hex prefix of its own oid paints once (`rev_paint`).
     let winner = public_base(root)?.map(|oid| ResolvedBase::Rev { spelling: oid.clone(), oid });
-    Ok(BaseStatus { winner, skipped })
+    Ok(ends(winner, skipped, None))
+}
+
+/// Resolve one recorded pick to the range's ends. A commit pick needs both of them, so a
+/// commit that has gone away skips the whole pick (`specs/sapling.md` Scopes).
+fn resolve_pick(
+    root: &Path,
+    pick: &Pick,
+) -> Result<Option<(ResolvedBase, Option<String>)>, GitFail> {
+    let Some(base_oid) = resolve_rev(root, &pick.base)? else { return Ok(None) };
+    let Some(tip) = &pick.tip else {
+        let winner = ResolvedBase::Rev { spelling: pick.base.clone(), oid: base_oid };
+        return Ok(Some((winner, None)));
+    };
+    let Some(tip_oid) = resolve_rev(root, tip)? else { return Ok(None) };
+    // The base paints as its own node, never as the `<node>^` that spelled it: the header
+    // already names the far end, and `spelling (oid)` would print the pair twice.
+    let winner = ResolvedBase::Rev { spelling: base_oid.clone(), oid: base_oid };
+    Ok(Some((winner, Some(tip_oid))))
 }
 
 /// Resolve one typed base-picker spelling (`specs/input.md` Base picker).
@@ -407,9 +458,8 @@ pub struct StackCommit {
     pub title: String,
 }
 
-/// The draft ancestors of `.`, newest first, for the base picker (`specs/sapling.md`
-/// Scopes). The working-copy parent is dropped: basing on it shows what `uncommitted`
-/// shows. Scanning the stack rather than the repository's whole draft set keeps this
+/// `.` and its draft ancestors, newest first, for the base picker (`specs/sapling.md`
+/// Scopes). Scanning the stack rather than the repository's whole draft set keeps this
 /// O(stack) (`SL-SCALE-CHANGED`).
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
     let args = ["log", "-r", "sort(draft() & ::., -rev)", "-T", "{node|short}\t{desc|firstline}\n"];
@@ -420,18 +470,12 @@ pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    let parent = parent_rev(root);
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|line| {
             let (node, title) = line.split_once('\t')?;
             let node = node.trim();
             if node.is_empty() {
-                return None;
-            }
-            let parent_row =
-                parent.as_deref().is_some_and(|p| p.starts_with(node) || node.starts_with(p));
-            if parent_row {
                 return None;
             }
             Some(StackCommit { node: node.to_string(), title: title.trim().to_string() })
@@ -602,16 +646,16 @@ impl Store {
         std::fs::rename(&tmp, path)
     }
 
-    /// The recorded pick's spelling, or `None` when no pick is recorded. A missing file
-    /// is no pick; a malformed spelling is no pick (`specs/review-model.md` Base branch).
-    pub fn read_base_pick(&self) -> Result<Option<String>, GitFail> {
+    /// The recorded pick, or `None` when no pick is recorded. A missing file is no pick;
+    /// a malformed spelling is no pick (`specs/review-model.md` Base branch).
+    pub fn read_base_pick(&self) -> Result<Option<Pick>, GitFail> {
         let content = match std::fs::read_to_string(self.pick_path()) {
             Ok(content) => content,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(GitFail(format!("reading the base pick: {e}"))),
         };
         let name = content.trim();
-        Ok(crate::git::pick_spelling_shaped(name).then(|| name.to_string()))
+        Ok(crate::git::pick_spelling_shaped(name).then(|| Pick::parse(name)))
     }
 
     /// Record `name` as this worktree's pick (`specs/sapling.md` Scopes).
@@ -776,7 +820,7 @@ impl TurnStore {
     /// stat-unchanged file skips its read and hash.
     pub fn snapshot(&mut self) -> Result<String> {
         let parent = parent_rev(&self.root).context("sl whereami gave no parent")?;
-        let entries = status_entries(&self.root, None)?;
+        let entries = status_entries(&self.root, None, None)?;
         let mut files: BTreeMap<String, Option<String>> = BTreeMap::new();
         let mut blobs: HashMap<String, std::sync::Arc<Vec<u8>>> = HashMap::new();
         for entry in entries {
@@ -872,7 +916,7 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
     let manifest = store
         .load_manifest(id)
         .with_context(|| format!("turn baseline {id} is missing from the snapshot store"))?;
-    let now = status_entries(root, Some(&manifest.parent))?;
+    let now = status_entries(root, Some(&manifest.parent), None)?;
     let mut out = Vec::new();
     // The turn-start-dirty files: the stored bytes are the baseline side.
     for (path, base_hash) in &manifest.files {
@@ -1024,11 +1068,17 @@ mod tests {
         // Pick: absent, written, cleared. A malformed spelling is no pick.
         assert_eq!(store.read_base_pick().unwrap(), None);
         store.write_base_pick("remote/main").unwrap();
-        assert_eq!(store.read_base_pick().unwrap(), Some("remote/main".to_string()));
+        let base_only = super::Pick { base: "remote/main".into(), tip: None };
+        assert_eq!(store.read_base_pick().unwrap(), Some(base_only));
         store.clear_base_pick().unwrap();
         assert_eq!(store.read_base_pick().unwrap(), None);
         store.write_base_pick("-bad").unwrap();
         assert_eq!(store.read_base_pick().unwrap(), None);
+        // A commit pick records both of the range's ends (`specs/sapling.md` Scopes).
+        store.write_base_pick("abc123^..abc123").unwrap();
+        let commit = super::Pick { base: "abc123^".into(), tip: Some("abc123".into()) };
+        assert_eq!(store.read_base_pick().unwrap(), Some(commit));
+        store.clear_base_pick().unwrap();
         // Baseline: a pointer without a manifest reads as no baseline; a persisted
         // pending roundtrips manifest and blob.
         assert_eq!(store.read_baseline(), None);

@@ -163,13 +163,20 @@ pub enum BaseChoice {
         name: String,
         oid: String,
     },
-    /// A Sapling stack commit: it reads as `title` and records `node`
-    /// (`specs/sapling.md` Scopes).
+    /// A Sapling stack commit to review, against its own parent: it reads as `title` and
+    /// records `node` (`specs/sapling.md` Scopes).
     Commit {
         node: String,
         title: String,
     },
+    /// The row that clears the pick, so the chain falls back to its own default base. A
+    /// git repository names that default with a branch row; Sapling has no branch to name,
+    /// so the row names what it reviews (`specs/sapling.md` Scopes).
+    Stack,
 }
+
+/// What the [`BaseChoice::Stack`] row reads as, and the name it matches on.
+const STACK_ROW: &str = "whole stack";
 
 impl BaseChoice {
     #[must_use]
@@ -177,6 +184,18 @@ impl BaseChoice {
         match self {
             Self::Branch { name, .. } | Self::Rev { name, .. } => name,
             Self::Commit { node, .. } => node,
+            Self::Stack => STACK_ROW,
+        }
+    }
+
+    /// The spelling the pick records. A commit row records both of the range's ends,
+    /// `<node>^..<node>`, so a restart still reviews that one commit
+    /// (`specs/sapling.md` Scopes).
+    #[must_use]
+    pub fn pick_spelling(&self) -> String {
+        match self {
+            Self::Commit { node, .. } => format!("{node}^..{node}"),
+            other => other.name().to_string(),
         }
     }
 
@@ -197,7 +216,7 @@ impl BaseChoice {
 
     #[must_use]
     pub fn is_default(&self) -> bool {
-        matches!(self, Self::Branch { is_default: true, .. })
+        matches!(self, Self::Branch { is_default: true, .. } | Self::Stack)
     }
 
     #[must_use]
@@ -205,7 +224,7 @@ impl BaseChoice {
         match self {
             Self::Rev { oid, .. } => Some(oid),
             Self::Commit { node, .. } => Some(node),
-            Self::Branch { .. } => None,
+            Self::Branch { .. } | Self::Stack => None,
         }
     }
 }
@@ -514,8 +533,9 @@ pub struct App {
     /// header names its winner (or the skip) and the diff builds against the winner's OID
     /// (`specs/review-model.md`).
     pub branch_base: git::BaseStatus,
-    /// The commit the `branch` scope's range ends at, painted after the base so the range
-    /// reads whole. A git repository has none (`specs/sapling.md` Scopes).
+    /// The commit the `branch` scope's range ends at, when a Sapling pick names one commit
+    /// to review. `None` ends the range at the working copy, which is every git range
+    /// (`specs/sapling.md` Scopes).
     pub branch_tip: Option<String>,
     /// Bumped by each pick made in this pane, so an in-flight build that read the old pick
     /// fails the landing's input match instead of reverting the pick (`crate::world::WorldInput`).
@@ -1482,15 +1502,23 @@ impl App {
                 (old, new)
             }
             Scope::Branch => {
-                let mb = self
-                    .branch_base
-                    .winner
-                    .as_ref()
-                    .and_then(|b| crate::vcs::merge_base(self.vcs, &self.repo, b.oid()));
-                let old = mb
-                    .map(|m| crate::vcs::file_content(self.vcs, &self.repo, &m, old_path))
+                let base = self.branch_base.winner.as_ref().map(git::ResolvedBase::oid);
+                // A pinned far end diffs commit to commit: the base is that commit's own
+                // parent, so no merge base stands between the two, and the new side reads
+                // from the commit rather than the worktree (`specs/sapling.md` Scopes).
+                let from = match (&self.branch_tip, base) {
+                    (Some(_), Some(oid)) => Some(oid.to_string()),
+                    (None, Some(oid)) => crate::vcs::merge_base(self.vcs, &self.repo, oid),
+                    (_, None) => None,
+                };
+                let old = from
+                    .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
                     .unwrap_or_default();
-                (old, worktree_content(&self.repo, new_path))
+                let new = match &self.branch_tip {
+                    Some(tip) => crate::vcs::file_content(self.vcs, &self.repo, tip, new_path),
+                    None => worktree_content(&self.repo, new_path),
+                };
+                (old, new)
             }
             Scope::LastTurn => {
                 let old = self
@@ -4183,22 +4211,25 @@ impl App {
                     return;
                 }
             }
-            // `.^` leads: it records the spelling, so it still names the latest commit
-            // after the next one lands (`specs/sapling.md` Scopes). A repository with no
-            // parent to name simply has no such row.
-            if let Ok(Some(git::ResolvedBase::Rev { spelling, oid })) =
-                crate::vcs::resolve_spelling(self.vcs, &self.repo, ".^")
-            {
-                rows.insert(0, BaseChoice::Rev { name: spelling, oid });
-            }
+            // The way back from a one-commit review: it clears the pick, so the chain falls
+            // back to the public base (`specs/sapling.md` Scopes).
+            rows.insert(0, BaseChoice::Stack);
         }
+        // A pinned far end is already a commit row, and its base is that commit's parent —
+        // a row for the parent would offer a range nobody picked.
         if let Some(git::ResolvedBase::Rev { spelling, oid }) = &self.branch_base.winner
+            && self.branch_tip.is_none()
             && !rows.iter().any(|r| r.name() == spelling)
         {
             rows.insert(0, BaseChoice::Rev { name: spelling.clone(), oid: oid.clone() });
         }
-        let current = self.branch_base.winner.as_ref().map(git::ResolvedBase::name);
-        let cursor = current.and_then(|c| rows.iter().position(|r| r.name() == c)).unwrap_or(0);
+        // A pinned far end highlights the commit row it came from. A stack row records the
+        // short node and the resolved tip is the full one, so the two match on the shorter.
+        let highlight = |r: &BaseChoice| match &self.branch_tip {
+            Some(tip) => r.oid().is_some_and(|o| tip.starts_with(o) || o.starts_with(tip)),
+            None => self.branch_base.winner.as_ref().map(git::ResolvedBase::name) == Some(r.name()),
+        };
+        let cursor = rows.iter().position(highlight).unwrap_or(0);
         self.base_picker = Some(BasePicker {
             rows,
             cursor,
@@ -4256,7 +4287,7 @@ impl App {
         let write = if choice.is_default() {
             crate::vcs::clear_base_pick(self.vcs, &self.repo)
         } else {
-            crate::vcs::write_base_pick(self.vcs, &self.repo, choice.name())
+            crate::vcs::write_base_pick(self.vcs, &self.repo, &choice.pick_spelling())
         };
         if let Err(e) = write {
             self.status = e.0;

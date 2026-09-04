@@ -81,14 +81,17 @@ branch); only the sources adapt:
 - The pick is one revision spelling per worktree, stored in the snapshot store. Sapling
   worktrees share no store reviewr may write, so the pick is per-worktree, not per-repository.
 - An empty `public()` answer is a no-base state, never an error.
-- The header names both ends of the `branch` range, `vs .^ (8a72e97) → bde1f87`. A git
-  repository names one end, because its base is a branch and the far end is the reviewer's
-  own branch (`tui.md`).
-- The base picker lists `.^` first, then the local bookmarks, then the draft ancestors of `.`,
-  newest first. A typed spelling resolves through `sl log -r`.
-- `.^` is the row that reviews the latest commit. It records the spelling, so it still names the
-  latest commit after the next one lands (`review-model.md`).
-- The working-copy parent is not a row. Basing on it shows what the `uncommitted` scope shows.
+- A `branch` range has two ends. It starts at the base and ends at the working copy, unless the
+  pick names one commit to review, which ends it at that commit.
+- The header names the far end only when the pick pins it, `vs f01c3d2 → 2eb84b9`. A range that
+  ends at the working copy names the base alone, as a git repository does (`tui.md`).
+- The base picker lists `whole stack` first, then the local bookmarks, then `.` and its draft
+  ancestors, newest first. A typed spelling resolves through `sl log -r`.
+- Picking a commit row reviews that commit alone, against its own parent. No merge base stands
+  between the two: the range's ends are the commit and its parent, whatever `.` has become.
+- Picking `whole stack` clears the pick, so the chain falls back to the public base.
+- A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
+  restart. An end that has gone away skips the whole pick.
 - A commit row reads as its description's first line and is marked with the short hash it
   records. The filter matches the description and the hash.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching
