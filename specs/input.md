@@ -105,7 +105,7 @@ The steps and the skips share the rest:
 `expand` and `collapse` act on the collapsible under the cursor, and scroll the diff sideways from anywhere else. A rebind moves the whole bundle.
 
 - On a directory row in the focused file list, `expand` shows its children and `collapse` hides them.
-- On a fold in the diff, `expand` opens it. An open fold never closes again, so `collapse` scrolls there.
+- On a fold in the diff, `expand` reveals a step of it and repeats (`diff-view.md`). An open fold never closes again, so `collapse` scrolls there.
 - Elsewhere, `expand` scrolls the diff right and `collapse` scrolls it left. The scroll is inert while wrap is on.
 
 ### Footer

@@ -101,7 +101,7 @@ struct TabStash {
     toggled_dirs: HashSet<String>,
     diff: FileDiff,
     visible: Vec<Row>,
-    expanded_folds: HashSet<u32>,
+    expanded_folds: HashMap<u32, usize>,
     diff_path: Option<String>,
     diff_cursor: usize,
     diff_scroll: usize,
@@ -413,6 +413,56 @@ enum FindHit {
     Folded { anchor: u32, new_no: u32 },
 }
 
+/// One pass of [`App::find_hits`] over the open diff: the matches so far, the visible index
+/// reached, and the cursor's standing among them. The caller feeds it rows in the order the
+/// screen shows them, so the two ways a row can arrive (really on screen, or hidden behind a
+/// fold marker) are the two methods below and nothing has to track `vis` by hand.
+struct FindWalk<'a> {
+    hits: Vec<FindHit>,
+    vis: usize,
+    cursor_rank: usize,
+    on_match: bool,
+    cursor: usize,
+    query: &'a str,
+    case_sensitive: bool,
+}
+
+impl FindWalk<'_> {
+    fn matches(&self, row: &Row) -> bool {
+        !find_match_ranges(&row.text(), self.query, self.case_sensitive).is_empty()
+    }
+
+    /// A row the screen really shows, at the current visible index.
+    fn shown(&mut self, row: &Row) {
+        let m = self.matches(row);
+        if self.vis == self.cursor {
+            self.cursor_rank = self.hits.len();
+            self.on_match = m;
+        }
+        if m {
+            self.hits.push(FindHit::Visible(self.vis));
+        }
+        self.vis += 1;
+    }
+
+    /// A fold marker, which occupies one visible row and hides `hidden`. The hidden lines are
+    /// still searched, so a match inside a collapsed run is reachable.
+    fn marker(&mut self, anchor: u32, hidden: &[Row]) {
+        if self.vis == self.cursor {
+            self.cursor_rank = self.hits.len();
+            self.on_match = false;
+        }
+        for line in hidden {
+            if self.matches(line) {
+                // Folds hold only context runs, so a folded line has a new-side number.
+                let new_no = line.new_no().expect("a folded row is context");
+                self.hits.push(FindHit::Folded { anchor, new_no });
+            }
+        }
+        self.vis += 1;
+    }
+}
+
 /// The char-index ranges of every non-overlapping occurrence of `query` in `text`, honoring
 /// `case_sensitive` (pass [`find_case_sensitive`]'s result for smart-case). Char indices, so the
 /// diff renderer overlays the highlight the same way it does word emphasis (specs/find-in-file.md).
@@ -595,8 +645,9 @@ pub struct App {
     /// The rows actually shown: `diff.rows` with each fold collapsed to a marker or
     /// expanded to its lines. The cursor, scroll, selection, and hit-testing index this.
     pub visible: Vec<Row>,
-    /// Fold anchors (first-hidden-line numbers) currently expanded; survives a poll.
-    expanded_folds: HashSet<u32>,
+    /// Per-fold reveal depth, keyed by anchor: how many lines are shown at each end of the
+    /// run. Absent means collapsed. Survives a poll (specs/diff-view.md Folding).
+    expanded_folds: HashMap<u32, usize>,
     /// The file the open diff belongs to — the diff title, frozen with the diff
     /// while composing even if `file_cursor` drifts as the file list updates.
     pub diff_path: Option<String>,
@@ -829,7 +880,7 @@ impl App {
             changed: HashMap::new(),
             diff: FileDiff::empty(),
             visible: Vec::new(),
-            expanded_folds: HashSet::new(),
+            expanded_folds: HashMap::new(),
             diff_path: None,
             diff_cursor: 0,
             diff_scroll: 0,
@@ -1451,50 +1502,92 @@ impl App {
         self.select_anchor = self.select_anchor.map(|a| a.min(last));
     }
 
-    /// Flatten `diff.rows` into `visible`: an expanded fold becomes its lines, a
-    /// collapsed fold stays a single marker row.
+    /// Flatten `diff.rows` into `visible`: a fold contributes the lines revealed at each end,
+    /// a marker over what it still hides, or its lines alone once fully revealed.
     fn rebuild_visible(&mut self) {
         self.visible = self
             .diff
             .rows
             .iter()
             .flat_map(|row| match row {
-                Row::Fold { lines }
-                    if row.fold_anchor().is_some_and(|a| self.expanded_folds.contains(&a)) =>
-                {
-                    lines.clone()
+                Row::Fold { lines, anchor } => {
+                    let parts = crate::diff::fold_parts(lines, self.fold_open(*anchor));
+                    let marker = (!parts.hidden.is_empty())
+                        .then(|| Row::Fold { lines: parts.hidden.to_vec(), anchor: *anchor });
+                    parts
+                        .head
+                        .iter()
+                        .cloned()
+                        .chain(marker)
+                        .chain(parts.tail.iter().cloned())
+                        .collect()
                 }
                 _ => vec![row.clone()],
             })
             .collect();
     }
 
-    /// Expand the fold under the cursor, revealing its hidden lines. Expansion is
-    /// permanent for the session — an expand is taken as intentional, so there is no
-    /// collapse-back.
-    /// Expand the fold under the cursor, keeping the viewport visually still. Where the fold
-    /// sits decides which way it grows: a fold in the top half of the diff expands upward (the
-    /// lines below it hold their screen position); one in the bottom half expands downward (the
-    /// lines above hold theirs). `heights`/`viewport` are this frame's pre-expand diff geometry.
+    /// How many lines of the fold anchored at `anchor` are revealed at each end; `0` when it
+    /// is collapsed.
+    fn fold_open(&self, anchor: u32) -> usize {
+        self.expanded_folds.get(&anchor).copied().unwrap_or(0)
+    }
+
+    /// Reveal `FOLD_STEP` more lines at each end of the fold under the cursor, so one press gives
+    /// context to the change above the run and the change below it both. Repeat to keep growing;
+    /// a step that meets in the middle reveals the rest. Revealing is permanent for the session,
+    /// so there is no collapse-back (specs/diff-view.md Folding).
+    ///
+    /// The viewport stays visually still, by two rules. While a marker survives, it holds its own
+    /// screen row: context grows away from it in both directions and the cursor rides it, so the
+    /// next press expands the same fold. On the step that reveals the rest there is no marker
+    /// left to hold, so where the fold sits decides instead — a fold in the top half of the
+    /// viewport expands upward (the lines below it hold their position), one in the bottom half
+    /// expands downward (the lines above hold theirs). `heights`/`viewport` are this frame's
+    /// pre-expand diff geometry.
     pub fn expand_fold(&mut self, heights: &[usize], viewport: usize) {
         let fold_idx = self.diff_cursor;
         let Some(anchor) = self.visible.get(fold_idx).and_then(Row::fold_anchor) else {
             return;
         };
-        // Expanding replaces the 1 fold row with N context rows; rows below it shift by N-1.
-        let shift = self.visible[fold_idx].hidden().saturating_sub(1);
         // Display rows between the viewport top and the fold; < half ⇒ top half. When the fold
         // is wheeled above the viewport (fold_idx < diff_scroll), the range is empty → above 0 →
         // top half, which is correct: the inserted rows land above the viewport, so advancing
         // diff_scroll by `shift` holds the visible content in place.
         let above: usize = heights.get(self.diff_scroll..fold_idx).map_or(0, |s| s.iter().sum());
         let top_half = above < viewport / 2;
-        self.expanded_folds.insert(anchor);
+        let before = self.visible.len();
+        *self.expanded_folds.entry(anchor).or_insert(0) += crate::diff::FOLD_STEP;
         self.rebuild_visible();
-        if top_half {
-            self.diff_scroll += shift; // hold the content below the fold; grow upward
+        match self.visible.iter().position(|r| r.fold_anchor() == Some(anchor)) {
+            // Rows landed above the marker as well as below, and only this fold moved, so the
+            // marker's new index minus its old one is exactly how far it has to scroll to stand
+            // still.
+            Some(marker) => {
+                self.diff_scroll += marker - fold_idx;
+                self.diff_cursor = marker;
+            }
+            // The rest of the run, so the content past the fold moves by however many the
+            // flatten actually added — the last step adds only what was left, not two steps'
+            // worth.
+            None if top_half => self.diff_scroll += self.visible.len().saturating_sub(before),
+            None => {} // bottom half: leave diff_scroll, the content above the fold stays put
         }
-        // bottom half: leave diff_scroll — the content above the fold stays put, grow downward
+    }
+
+    /// Reveal the whole run anchored at `anchor`, however deep it is. The in-file search jumps
+    /// to a match inside a fold, so that line has to become a real row (specs/find-in-file.md).
+    fn open_fold_whole(&mut self, anchor: u32) {
+        let whole = self
+            .diff
+            .rows
+            .iter()
+            .find_map(|r| match r {
+                Row::Fold { lines, anchor: a } if *a == anchor => Some(lines.len()),
+                _ => None,
+            })
+            .unwrap_or(0);
+        self.expanded_folds.insert(anchor, whole);
     }
 
     /// The old and new content of `file` for the current scope: old from the scope's base
@@ -3700,59 +3793,31 @@ impl App {
     /// cursor's own row matches. The current match is the cursor's row when it matches, so both
     /// the count and stepping derive from this walk (specs/find-in-file.md).
     fn find_hits(&self, query: &str) -> (Vec<FindHit>, usize, bool) {
-        let cs = find_case_sensitive(query);
-        let is_hit = |row: &Row| !find_match_ranges(&row.text(), query, cs).is_empty();
-        let mut hits = Vec::new();
-        let mut vis = 0usize;
-        let mut cursor_rank = 0usize;
-        let mut on_match = false;
+        let mut walk = FindWalk {
+            hits: Vec::new(),
+            vis: 0,
+            cursor_rank: 0,
+            on_match: false,
+            cursor: self.diff_cursor,
+            query,
+            case_sensitive: find_case_sensitive(query),
+        };
+        // The same split `rebuild_visible` paints, so a line offered as a jump is always one
+        // the screen is really hiding.
         for row in &self.diff.rows {
-            let expanded = row.fold_anchor().is_some_and(|a| self.expanded_folds.contains(&a));
             match row {
-                Row::Fold { lines } if !expanded => {
-                    // The collapsed marker sits at `vis`; its lines are hidden, still searched.
-                    if vis == self.diff_cursor {
-                        cursor_rank = hits.len();
-                        on_match = false;
+                Row::Fold { lines, anchor } => {
+                    let parts = crate::diff::fold_parts(lines, self.fold_open(*anchor));
+                    parts.head.iter().for_each(|l| walk.shown(l));
+                    if !parts.hidden.is_empty() {
+                        walk.marker(*anchor, parts.hidden);
                     }
-                    let anchor = row.fold_anchor().expect("a fold has a first hidden line");
-                    for line in lines {
-                        if is_hit(line) {
-                            // Folds hold only context runs, so a folded line has a new-side number.
-                            let new_no = line.new_no().expect("a folded row is context");
-                            hits.push(FindHit::Folded { anchor, new_no });
-                        }
-                    }
-                    vis += 1;
+                    parts.tail.iter().for_each(|l| walk.shown(l));
                 }
-                Row::Fold { lines } => {
-                    // Expanded: its lines are visible rows, inline at `vis`.
-                    for line in lines {
-                        let m = is_hit(line);
-                        if vis == self.diff_cursor {
-                            cursor_rank = hits.len();
-                            on_match = m;
-                        }
-                        if m {
-                            hits.push(FindHit::Visible(vis));
-                        }
-                        vis += 1;
-                    }
-                }
-                content => {
-                    let m = is_hit(content);
-                    if vis == self.diff_cursor {
-                        cursor_rank = hits.len();
-                        on_match = m;
-                    }
-                    if m {
-                        hits.push(FindHit::Visible(vis));
-                    }
-                    vis += 1;
-                }
+                content => walk.shown(content),
             }
         }
-        (hits, cursor_rank, on_match)
+        (walk.hits, walk.cursor_rank, walk.on_match)
     }
 
     /// `enter`/`↓` (`delta > 0`) and `↑` (`delta < 0`): move the cursor to the nearest matching
@@ -3778,7 +3843,9 @@ impl App {
         match hits[target] {
             FindHit::Visible(v) => self.diff_cursor = v,
             FindHit::Folded { anchor, new_no } => {
-                self.expanded_folds.insert(anchor);
+                // The whole run, not a step: the match may sit anywhere in it, and a step
+                // deep enough to reach it is the whole run in every case but a lucky one.
+                self.open_fold_whole(anchor);
                 self.rebuild_visible();
                 // Expanding the fold reveals the context row that held this new-side line number.
                 self.diff_cursor = self

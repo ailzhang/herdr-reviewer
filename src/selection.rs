@@ -190,7 +190,7 @@ mod tests {
     }
 
     fn fold(hidden: usize) -> Row {
-        Row::Fold { lines: (0..hidden).map(|_| ctx("hidden")).collect() }
+        Row::Fold { lines: (0..hidden).map(|_| ctx("hidden")).collect(), anchor: 1 }
     }
 
     fn point(row: usize, chr: usize) -> Point {

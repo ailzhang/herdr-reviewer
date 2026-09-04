@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-20
-Last edited: 2026-08-19
+Last edited: 2026-09-04
 ---
 
 # Find in file
@@ -44,7 +44,7 @@ Literal search within the open file in the read pane, opened with `ctrl+f`: ever
 ## Stepping
 
 - `enter` and `↓` move the cursor to the nearest matching row below it, `↑` to the nearest above. Both wrap at the file's ends.
-- The move reveals the row: the cursor and scroll bring it into view, expanding a fold around it (`diff-view.md`).
+- The move reveals the row: the cursor and scroll bring it into view, revealing the whole of a fold around it (`diff-view.md`).
 - Stepping is inert while nothing matches.
 - Typing re-lights the matches and never moves the cursor. Only a step moves it.
 

@@ -26,10 +26,28 @@ pub struct Span {
 /// for comments; a `Fold` is a collapsed run of context lines it owns.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Row {
-    Context { old_no: u32, new_no: u32, spans: Vec<Span> },
-    Deletion { old_no: u32, spans: Vec<Span>, emphasis: Vec<CharRange> },
-    Insertion { new_no: u32, spans: Vec<Span>, emphasis: Vec<CharRange> },
-    Fold { lines: Vec<Row> },
+    Context {
+        old_no: u32,
+        new_no: u32,
+        spans: Vec<Span>,
+    },
+    Deletion {
+        old_no: u32,
+        spans: Vec<Span>,
+        emphasis: Vec<CharRange>,
+    },
+    Insertion {
+        new_no: u32,
+        spans: Vec<Span>,
+        emphasis: Vec<CharRange>,
+    },
+    /// A collapsed run of context lines. `anchor` is the whole run's first line number, held
+    /// rather than derived: a partly revealed fold's marker owns only the middle of the run, and
+    /// deriving identity from that would rename the fold on every step (specs/diff-view.md).
+    Fold {
+        lines: Vec<Row>,
+        anchor: u32,
+    },
 }
 
 /// A `[start, end)` run of char indices within a line, for word-level emphasis.
@@ -85,16 +103,16 @@ impl Row {
     /// The hidden line count of a fold, else 0.
     pub fn hidden(&self) -> usize {
         match self {
-            Row::Fold { lines } => lines.len(),
+            Row::Fold { lines, .. } => lines.len(),
             _ => 0,
         }
     }
 
-    /// A fold's stable identity across rebuilds: the line number of its first hidden
-    /// line. `None` for any other row.
+    /// A fold's stable identity across rebuilds: the line number of the whole run's first
+    /// line, which a partial reveal does not move. `None` for any other row.
     pub fn fold_anchor(&self) -> Option<u32> {
         match self {
-            Row::Fold { lines } => lines.first().and_then(|r| r.new_no().or_else(|| r.old_no())),
+            Row::Fold { anchor, .. } => Some(*anchor),
             _ => None,
         }
     }
@@ -448,6 +466,40 @@ fn push_range(ranges: &mut Vec<CharRange>, pos: u32, len: u32) {
 /// Context lines kept adjacent to each change; longer unchanged runs collapse to a fold.
 const FOLD_MARGIN: usize = 3;
 
+/// Lines one expand reveals at each end of a fold, so one keypress lands context against both
+/// neighbouring changes and the marker shrinks in the middle (specs/diff-view.md Folding).
+pub const FOLD_STEP: usize = 10;
+
+/// How a fold lands in the visible list at reveal depth `open`: the lines shown above the
+/// marker, the lines the marker still hides, and the lines shown below it. `hidden` empty means
+/// the run is fully revealed and no marker row remains.
+///
+/// One derivation for the flatten and for the in-file search, so a hidden line the search
+/// offers to jump to cannot be one the flatten already painted.
+#[derive(Clone, Copy, Debug)]
+pub struct FoldParts<'a> {
+    pub head: &'a [Row],
+    pub hidden: &'a [Row],
+    pub tail: &'a [Row],
+}
+
+/// Split a fold's `lines` at reveal depth `open`. A depth that meets in the middle reveals the
+/// whole run rather than leaving a marker over nothing.
+#[must_use]
+pub fn fold_parts(lines: &[Row], open: usize) -> FoldParts<'_> {
+    let whole = FoldParts { head: lines, hidden: &[], tail: &[] };
+    if open == 0 {
+        return FoldParts { head: &[], hidden: lines, tail: &[] };
+    }
+    // `2 * open` saturates, so a caller asking for the whole run cannot wrap into a marker.
+    if open.saturating_mul(2) >= lines.len() {
+        return whole;
+    }
+    let (head, rest) = lines.split_at(open);
+    let (hidden, tail) = rest.split_at(rest.len() - open);
+    FoldParts { head, hidden, tail }
+}
+
 /// Replace each run of unchanged `Context` rows that exceeds the margin with a single
 /// `Fold` owning the hidden rows, keeping `FOLD_MARGIN` lines next to every change and
 /// at the file head and tail.
@@ -477,7 +529,10 @@ fn collapse_context(rows: &[Row]) -> Vec<Row> {
         }
         // A single hidden line is shown as-is — a `⋯ 1 line` fold would save nothing.
         if i - start > 1 {
-            out.push(Row::Fold { lines: rows[start..i].to_vec() });
+            let lines = rows[start..i].to_vec();
+            // A fold holds context rows only, so both line numbers are present.
+            let anchor = lines[0].new_no().or_else(|| lines[0].old_no()).unwrap_or_default();
+            out.push(Row::Fold { lines, anchor });
         } else {
             out.extend(rows[start..i].iter().cloned());
         }

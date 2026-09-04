@@ -979,6 +979,72 @@ fn folded_repo() -> Repo {
     r
 }
 
+/// A file with one change in the middle of a long run, so both its folds are far deeper than a
+/// single expand step.
+fn deeply_folded_repo() -> Repo {
+    use std::fmt::Write as _;
+    let r = Repo::init();
+    let mut old = String::new();
+    for i in 0..200 {
+        writeln!(old, "line {i}").unwrap();
+    }
+    r.write("big.rs", &old);
+    r.commit_all("init");
+    r.write("big.rs", &old.replace("line 100", "LINE 100"));
+    r
+}
+
+#[test]
+fn a_deep_fold_expands_a_step_at_a_time_around_the_marker() {
+    let r = deeply_folded_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    let head = app.visible.iter().position(|row| row.hidden() > 0).unwrap();
+    let deep = app.visible[head].hidden();
+    assert!(deep > 2 * herdr_reviewr::diff::FOLD_STEP, "the run is deeper than one step");
+
+    // One press reveals a step at each end, so the change below the run and the file head above
+    // it both gain context, and the marker keeps the rest.
+    app.diff_cursor = head;
+    app.diff_scroll = head; // the marker sits at the top of the viewport
+    let heights = vec![1usize; app.visible.len()];
+    app.expand_fold(&heights, 20);
+    let marker = app.diff_cursor;
+    assert_eq!(marker, head + herdr_reviewr::diff::FOLD_STEP, "the cursor rides the marker");
+    assert_eq!(app.visible[marker].hidden(), deep - 2 * herdr_reviewr::diff::FOLD_STEP);
+    assert_eq!(app.diff_scroll, marker, "the marker holds its screen row");
+    assert!(app.on_fold(), "`→` expands the same fold again");
+
+    // Repeat until the step meets in the middle: the marker goes and the run is all context.
+    for _ in 0..deep {
+        if !app.on_fold() {
+            break;
+        }
+        let heights = vec![1usize; app.visible.len()];
+        app.expand_fold(&heights, 20);
+    }
+    assert!(!app.on_fold(), "the run is fully revealed");
+    assert!(!app.visible[..=app.diff_cursor].iter().any(|r| r.hidden() > 0), "no marker is left");
+    assert!(app.diff_cursor < app.visible.len(), "cursor stays in range");
+}
+
+#[test]
+fn a_partly_revealed_fold_keeps_its_identity_across_a_refresh() {
+    let r = deeply_folded_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    app.diff_cursor = app.visible.iter().position(|row| row.hidden() > 0).unwrap();
+    expand_fold(&mut app);
+    expand_fold(&mut app);
+    let hidden = app.visible[app.diff_cursor].hidden();
+
+    // A refresh of the same file rebuilds the rows; the depth is keyed on the whole run's first
+    // line, which a partial reveal does not move, so the reveal survives.
+    app.reload().unwrap();
+    let marker = app.visible.iter().position(|row| row.hidden() > 0).expect("still a marker");
+    assert_eq!(app.visible[marker].hidden(), hidden, "the reveal depth survived the refresh");
+}
+
 #[test]
 fn a_fold_expands_permanently_and_keeps_the_cursor_in_range() {
     let r = folded_repo();
