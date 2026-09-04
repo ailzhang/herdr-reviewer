@@ -156,8 +156,45 @@ pub fn changed_files(
     }
 }
 
-/// One scope build: the file list from `sl status`, the counts from one `sl diff`.
+/// One scope build: the file list from `sl status`, the counts from one `sl diff`. A range
+/// pinned at both ends is served from [`range_cache`], so reviewing one commit costs its
+/// own resolution and nothing more per poll.
 fn changed_set(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<ChangedFile>> {
+    let key = from.zip(to).map(|(f, t)| (f.to_string(), t.to_string()));
+    if let Some(key) = &key
+        && let Some(hit) = range_cache().lock().unwrap().get(key)
+    {
+        return Ok(hit.clone());
+    }
+    let files = build_changed_set(root, from, to)?;
+    if let Some(key) = key {
+        let mut cache = range_cache().lock().unwrap();
+        // A wholesale clear repopulates from immutable content, so it can never serve a
+        // wrong answer.
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(key, files.clone());
+    }
+    Ok(files)
+}
+
+/// A cache from a commit-to-commit range to the files it changed.
+type RangeCache = Mutex<HashMap<(String, String), Vec<ChangedFile>>>;
+
+/// Two pinned commits never change, so the changed set between them never changes. A
+/// range that ends at the working copy is absent from this cache: the working copy moves
+/// under it (`specs/sapling.md` Reads).
+fn range_cache() -> &'static RangeCache {
+    static CACHE: OnceLock<RangeCache> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
+
+fn build_changed_set(
+    root: &Path,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<ChangedFile>> {
     let entries = status_entries(root, from, to)?;
     if entries.is_empty() {
         return Ok(Vec::new());
