@@ -365,6 +365,23 @@ fn a_commit_pick_follows_the_commit_through_an_amend() {
     assert!(painted(&app).contains(&want), "the header names the new node; wanted {want:?}");
 }
 
+#[test]
+fn a_pick_on_the_root_commit_is_skipped_for_want_of_a_parent() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("the root commit");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+
+    // A root commit's parent is the null node, so the range has no far end to diff from.
+    let ends = vcs::resolve_base(VcsKind::Sapling, &root, None).unwrap();
+    assert_eq!(ends.tip, None);
+    assert_eq!(ends.base.winner, None, "the repo has no public commit to fall back to");
+    assert_eq!(ends.base.skipped.as_deref(), Some(node.as_str()), "the pick reports as skipped");
+}
+
 /// Captures the export payload, so a test can read what the agent would have been sent.
 #[derive(Default)]
 struct Captured(std::cell::RefCell<String>);

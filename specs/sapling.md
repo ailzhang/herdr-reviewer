@@ -97,7 +97,8 @@ branch); only the sources adapt:
   is not the worktree the agent edits (`review-model.md` Export).
 - Picking `whole stack` clears the pick, so the chain falls back to the public base.
 - A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
-  restart. A commit with no live successor skips the whole pick.
+  restart. The pick skips whole when its commit has no live successor, and when that
+  successor is a root commit with no parent to diff against.
 - A commit row reads as its description's first line and is marked with the short hash it
   records. The filter matches the description and the hash.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching

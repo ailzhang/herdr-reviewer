@@ -346,7 +346,14 @@ fn unusable(spelling: &str) -> bool {
 
 /// Run one revset and read the node it names, `Ok(None)` when it names none.
 fn log_node(root: &Path, revset: &str) -> Result<Option<String>, GitFail> {
-    let args = ["log", "-r", revset, "-T", "{node}"];
+    log_line(root, revset, "{node}")
+}
+
+/// Run one revset and read the single line `template` prints for it, `Ok(None)` when the
+/// revset matches nothing. One spawn costs a third of a second in a monorepo, so a caller
+/// that needs two facts about one commit asks for both in one template.
+fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>, GitFail> {
+    let args = ["log", "-r", revset, "-T", template];
     let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -362,8 +369,8 @@ fn log_node(root: &Path, revset: &str) -> Result<Option<String>, GitFail> {
         }
         return Err(GitFail(format!("sl {args:?}: {}", stderr.trim())));
     }
-    let node = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Ok((!node.is_empty()).then_some(node))
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok((!line.is_empty()).then_some(line))
 }
 
 /// The bounded revset one spelling probes. Digit-only always routes through `id()`
@@ -468,13 +475,20 @@ fn resolve_pick(
     if unusable(tip) {
         return Ok(None);
     }
-    let Some(tip_oid) = log_node(root, &successor_revset(tip))? else { return Ok(None) };
-    // The recorded base is the tip's parent, so it re-derives from the tip reviewr just
-    // resolved. Reading the recorded spelling instead would pair an amended commit with
-    // the parent of the node it replaced, which is the same commit only until a rebase.
-    let Some(base_oid) = log_node(root, &format!("limit(p1(id({tip_oid})), 1)"))? else {
+    // The recorded base is the tip's parent, so both ends come from one commit and one
+    // spawn. Reading the recorded spelling instead would pair an amended commit with the
+    // parent of the node it replaced, which is the same commit only until a rebase.
+    let Some(line) = log_line(root, &successor_revset(tip), "{node} {p1node}")? else {
         return Ok(None);
     };
+    let mut ends = line.split_whitespace();
+    let (Some(tip_oid), Some(base_oid)) = (ends.next(), ends.next()) else { return Ok(None) };
+    // A root commit's parent is the null node. The range needs both ends, so the pick is
+    // skipped exactly as one whose commit has gone away.
+    if base_oid.bytes().all(|b| b == b'0') {
+        return Ok(None);
+    }
+    let (tip_oid, base_oid) = (tip_oid.to_string(), base_oid.to_string());
     // The base paints as its own node, never as the `<node>^` that spelled it: the header
     // already names the far end, and `spelling (oid)` would print the pair twice.
     let winner = ResolvedBase::Rev { spelling: base_oid.clone(), oid: base_oid };
