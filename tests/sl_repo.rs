@@ -618,3 +618,54 @@ fn a_sapling_pane_offers_the_changes_tab_alone() {
         assert_eq!(app.tab, herdr_reviewr::app::Tab::Changes, "{tab:?} is not offered");
     }
 }
+
+#[test]
+fn last_turn_diffs_a_sapling_worktree_against_the_snapshot_baseline() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("base");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::LastTurn, None);
+    let mut host = herdr_reviewr::world::TurnHost::open(root.clone(), VcsKind::Sapling);
+    let mut observe = |app: &mut herdr_reviewr::app::App, status| {
+        let sample = herdr_reviewr::herdr::AgentSample {
+            cwd: Some(root.to_string_lossy().into_owned()),
+            status,
+        };
+        let report = host.observe_agents(Some(&[sample]));
+        let baseline = host.baseline().map(str::to_string);
+        app.sync_turn_baseline(baseline.clone());
+        app.sync_agents_present(report.agents_present);
+        baseline
+    };
+
+    app.reload().unwrap();
+    assert!(app.awaiting_turn(), "no baseline until a turn is observed");
+
+    observe(&mut app, herdr_reviewr::turn::Status::Idle);
+    observe(&mut app, herdr_reviewr::turn::Status::Working); // the candidate pins the turn's start
+    // The turn edits a tracked file, adds an untracked one, and commits a third change.
+    r.write("a.txt", "one\ntwo\n");
+    r.write("new.txt", "fresh\n");
+    r.write("committed.txt", "landed mid-turn\n");
+    r.commit_all("a commit made during the turn");
+    observe(&mut app, herdr_reviewr::turn::Status::Working);
+    let baseline = observe(&mut app, herdr_reviewr::turn::Status::Idle);
+
+    app.reload().unwrap();
+    assert!(!app.awaiting_turn(), "the baseline is set");
+    let mut paths = app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        ["a.txt", "committed.txt", "new.txt"],
+        "a commit made during the turn stays in the turn's diff"
+    );
+    let a = app.entries.iter().find(|e| e.path == "a.txt").unwrap();
+    let annotation = a.annotation.as_ref().expect("a changed file is annotated");
+    assert_eq!((annotation.change, annotation.additions), (ChangeKind::Modified, 1));
+    // The baseline side is the turn's start, not the working-copy parent the commit moved.
+    let baseline = baseline.expect("a baseline");
+    assert_eq!(vcs::file_content(VcsKind::Sapling, &root, &baseline, "a.txt"), "one\n");
+}
