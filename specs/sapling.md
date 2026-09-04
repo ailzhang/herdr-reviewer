@@ -114,6 +114,9 @@ branch); only the sources adapt:
   the description, the hash, and the number.
 - A typed code review number matches the stack rows, never a live revision probe. Sapling
   pulls an unknown bare symbol from the remote, and `SL-NO-REPO-WRITES` forbids the write.
+- Every probed spelling resolves inside `present()`, so an unknown one is empty rather than
+  pulled. A name that looks like a remote one is otherwise fetched before Sapling gives up
+  on it, and the picker probes per keystroke while a dormant pick probes per poll.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching
   no row says `no commits match`.
 - A hex-shaped spelling resolves as a hash prefix, never as a local revision number —

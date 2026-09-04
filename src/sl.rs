@@ -440,11 +440,21 @@ fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>,
 /// whatever its length — bare, even `12` is a revnum. Mixed hex routes through `id()`
 /// from git's own abbreviation floor, so a three-letter bookmark named `abc` still
 /// resolves as a name.
+///
+/// `present()` holds the name inside the revset. A bare unknown symbol that looks like a
+/// remote one is pulled from the remote before Sapling gives up on it, which is a
+/// repository write (`SL-NO-REPO-WRITES`) on a path that runs per keystroke and per poll.
+/// It also turns the miss into empty output rather than an abort, which is what the
+/// chain's skip-never-error contract wants.
 fn probe_revset(spelling: &str) -> String {
     let all_digits = spelling.bytes().all(|b| b.is_ascii_digit());
     let hex_shaped =
         all_digits || (spelling.len() >= 4 && spelling.bytes().all(|b| b.is_ascii_hexdigit()));
-    if hex_shaped { format!("limit(id({spelling}), 1)") } else { format!("limit({spelling}, 1)") }
+    if hex_shaped {
+        format!("limit(present(id({spelling})), 1)")
+    } else {
+        format!("limit(present({spelling}), 1)")
+    }
 }
 
 /// The last public ancestor of the working copy — the default `branch` base. An empty
@@ -1174,13 +1184,20 @@ mod tests {
     fn probe_revset_reads_hex_as_a_prefix_and_names_as_names() {
         // Digit-only is a hash prefix at any length: bare, `123456` is a revnum and
         // would pin an ancient commit (`specs/sapling.md` Scopes).
-        assert_eq!(probe_revset("123456"), "limit(id(123456), 1)");
-        assert_eq!(probe_revset("0"), "limit(id(0), 1)");
-        assert_eq!(probe_revset("beef1234"), "limit(id(beef1234), 1)");
+        assert_eq!(probe_revset("123456"), "limit(present(id(123456)), 1)");
+        assert_eq!(probe_revset("0"), "limit(present(id(0)), 1)");
+        assert_eq!(probe_revset("beef1234"), "limit(present(id(beef1234)), 1)");
         // Short mixed hex stays a name, so a bookmark named `abc` resolves.
-        assert_eq!(probe_revset("abc"), "limit(abc, 1)");
-        assert_eq!(probe_revset("master"), "limit(master, 1)");
-        assert_eq!(probe_revset("last(public() & ::.)"), "limit(last(public() & ::.), 1)");
+        assert_eq!(probe_revset("abc"), "limit(present(abc), 1)");
+        assert_eq!(probe_revset("master"), "limit(present(master), 1)");
+        // `present()` on every name: a bare unknown one that looks remote is pulled
+        // before Sapling gives up on it, and reviewr writes nothing to the repository.
+        assert_eq!(
+            probe_revset("fbcode-nope"),
+            "limit(present(fbcode-nope), 1)",
+            "an unknown remote-shaped name must not reach the remote"
+        );
+        assert_eq!(probe_revset("last(public() & ::.)"), "limit(present(last(public() & ::.)), 1)");
     }
 
     #[test]
@@ -1188,7 +1205,7 @@ mod tests {
         // The recorded node is a hash, so it reaches `successors` through `id()` too.
         assert_eq!(
             super::successor_revset("beef1234"),
-            "limit(last(sort(successors(limit(id(beef1234), 1)) - obsolete(), rev)), 1)"
+            "limit(last(sort(successors(limit(present(id(beef1234)), 1)) - obsolete(), rev)), 1)"
         );
     }
 

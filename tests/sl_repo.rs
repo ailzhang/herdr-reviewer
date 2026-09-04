@@ -552,6 +552,54 @@ fn the_stack_offers_the_live_successor_of_an_obsolete_working_copy_parent() {
 }
 
 #[test]
+fn an_unknown_remote_shaped_spelling_never_pulls_from_the_remote() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("base");
+
+    // A remote that can actually answer: a clone of this repo, one commit ahead, with the
+    // commit under a bookmark whose name matches an autopull pattern. fbsource ships one
+    // covering `feature/`, `fbcode-`, `xplat/` and more.
+    let remote = tempfile::tempdir().unwrap();
+    let remote_path = remote.path().join("clone");
+    r.sl(&["clone", &r.root().display().to_string(), &remote_path.display().to_string()]);
+    let sl_remote = |args: &[&str]| {
+        let out = Command::new("sl")
+            .current_dir(&remote_path)
+            .env("HGPLAIN", "1")
+            .args(["--config", "ui.username=Test <test@herdr.test>"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "sl {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    std::fs::write(remote_path.join("b.txt"), "two\n").unwrap();
+    sl_remote(&["addremove", "-q"]);
+    sl_remote(&["commit", "-m", "remote work"]);
+    sl_remote(&["bookmark", "feature/target"]);
+    let remote_node = sl_remote(&["whereami"]).trim().to_string();
+
+    std::fs::write(
+        r.path().join(".hg/hgrc"),
+        format!(
+            "[paths]\ndefault = {}\n\
+             [remotenames]\nautopullhoistpattern = re:^feature(/|-)[A-Za-z0-9._/-]+$\n",
+            remote_path.display()
+        ),
+    )
+    .unwrap();
+
+    // The picker probes this on every keystroke, and a dormant pick re-probes it on every
+    // poll. Sapling pulls a bare unknown remote-shaped symbol before giving up on it, and
+    // `SL-NO-REPO-WRITES` forbids the write.
+    let hit = vcs::resolve_spelling(VcsKind::Sapling, &r.root(), "feature/target").unwrap();
+    assert_eq!(hit.map(|h| h.oid().to_string()), None, "the probe resolved it, so it pulled it");
+    let pulled = r.sl(&["log", "-r", &format!("present(id({remote_node}))"), "-T", "{node}"]);
+    assert!(pulled.trim().is_empty(), "the remote commit landed in the repo: {pulled}");
+}
+
+#[test]
 fn the_public_base_gets_no_row_of_its_own_but_a_pick_naming_it_does() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");
