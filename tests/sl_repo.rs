@@ -199,6 +199,25 @@ fn a_neighbours_old_side_reads_ahead_of_the_reviewer() {
 }
 
 #[test]
+fn a_failed_ancestor_query_fails_the_branch_build() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("base");
+    r.write("a.txt", "two\n");
+    // An unresolvable base aborts the ancestor query. Collapsing that into an empty
+    // changeset would blank a populated branch view over a transient failure, where a
+    // failed build keeps the stale frame and reports (`specs/overview.md` Continuity).
+    let built = vcs::changed_files(
+        VcsKind::Sapling,
+        &r.root(),
+        Scope::Branch,
+        Some("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
+        None,
+    );
+    assert!(built.is_err(), "{built:?}");
+}
+
+#[test]
 fn a_rename_carries_its_previous_path() {
     let r = sl_repo_or_skip!();
     r.write("old.txt", "keep this line\n");

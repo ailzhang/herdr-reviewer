@@ -194,6 +194,8 @@ key and the footer drops the tab keys (`input.md`).
 - A failed Sapling command fails the build whole; the stale frame stays and the status reports,
   matching the git contract (`overview.md` Continuity).
 - The status names the failed command as it would be typed, `sl status -mardu -C -Tjson: abort: …`.
+- A base sharing no ancestor with the working copy is an empty `branch` changeset. An ancestor
+  query that failed is not, so a transient abort keeps the stale frame.
 - A crash between manifest write and baseline update costs at most that turn's baseline; the
   previous baseline stays live.
 - A merge in progress pins to the first parent.

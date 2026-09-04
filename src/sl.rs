@@ -165,8 +165,9 @@ pub fn changed_files(
             // A pinned far end diffs commit to commit. The base is that commit's own
             // parent, so no merge base stands between the two (`specs/sapling.md` Scopes).
             (Some(base), Some(tip)) => changed_set(root, Some(base), Some(tip)),
-            (Some(base), None) => match merge_base(root, base) {
+            (Some(base), None) => match merge_base_checked(root, base)? {
                 Some(mb) => changed_set(root, Some(&mb), None),
+                // No common ancestor is a real, empty answer.
                 None => Ok(Vec::new()),
             },
             (None, _) => Ok(Vec::new()),
@@ -513,36 +514,41 @@ fn public_base(root: &Path) -> Result<Option<String>, GitFail> {
     resolve_rev(root, "last(public() & ::.)")
 }
 
-/// The merge base of `base_oid` and the working copy, through the immutable-ancestor
-/// cache — `sl log` pays command dispatch, and `content_sides` runs on the frame loop.
-/// The revset uses the pinned parent, never `.`: the working copy can move between the
-/// pin and the spawn, and the cache key must name what was actually asked. A failed
-/// command returns `None` uncached, so the next build retries — caching it would
-/// freeze a transient failure into a permanently empty branch view
-/// (`specs/overview.md` Continuity).
-pub fn merge_base(root: &Path, base_oid: &str) -> Option<String> {
-    let parent = parent_rev(root)?;
+/// The merge base of `base_oid` and the working copy, and `None` when the two share no
+/// ancestor. A failed command is an error: the branch changeset is the caller that has a
+/// populated view to lose, and an aborted ancestor query must not read there as a branch
+/// with nothing on it (`specs/overview.md` Continuity).
+///
+/// The answer comes through the immutable-ancestor cache, since `sl log` pays command
+/// dispatch and `content_sides` runs on the frame loop. The revset uses the pinned parent,
+/// never `.`: the working copy can move between the pin and the spawn, and the cache key
+/// must name what was actually asked. Only an answer caches, so the next build retries a
+/// failure rather than freezing it.
+fn merge_base_checked(root: &Path, base_oid: &str) -> Result<Option<String>> {
+    let parent = parent_rev(root).context("sl whereami gave no parent")?;
     let key = (base_oid.to_string(), parent);
     if let Some(hit) = ancestor_cache().lock().unwrap().get(&key) {
-        return hit.clone();
+        return Ok(hit.clone());
     }
     let revset = format!("ancestor({base_oid}, {})", key.1);
-    let node = match sl(root, &["log", "-r", &revset, "-T", "{node}"]) {
-        Ok(out) => {
-            let node = out.trim().to_string();
-            (!node.is_empty()).then_some(node)
-        }
-        Err(e) => {
-            logln!("sl merge_base failed: {e}");
-            return None;
-        }
-    };
+    let out = sl(root, &["log", "-r", &revset, "-T", "{node}"])?;
+    let node = out.trim().to_string();
+    let node = (!node.is_empty()).then_some(node);
     let mut cache = ancestor_cache().lock().unwrap();
     if cache.len() >= 128 {
         cache.clear();
     }
     cache.insert(key, node.clone());
-    node
+    Ok(node)
+}
+
+/// The merge base, with a failed command read as no answer. The diff pane's old side has
+/// no stale frame to keep, so it degrades to an empty side rather than failing the frame.
+pub fn merge_base(root: &Path, base_oid: &str) -> Option<String> {
+    merge_base_checked(root, base_oid)
+        .inspect_err(|e| logln!("sl merge_base failed: {e}"))
+        .ok()
+        .flatten()
 }
 
 /// A cache from a (revision, revision-or-path) pair to an immutable answer.
