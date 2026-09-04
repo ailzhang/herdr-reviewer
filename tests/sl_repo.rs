@@ -395,6 +395,47 @@ fn a_commit_pick_follows_the_commit_through_an_amend() {
 }
 
 #[test]
+fn a_rebased_pick_diffs_against_the_parent_it_has_now() {
+    let r = sl_repo_or_skip!();
+    r.write("base.txt", "base\n");
+    r.commit_all("base commit");
+    let old_parent = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    r.write("second.txt", "committed\n");
+    r.commit_all("second commit");
+    let node = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+
+    // Somebody else's work lands under the reviewed commit and the stack rebases onto it,
+    // the daily loop in a monorepo. Reading the recorded `<node>^` would put the old parent
+    // back under the review and drag the landed commit into the diff.
+    r.sl(&["goto", "-q", &old_parent]);
+    r.write("landed.txt", "not this reviewer's work\n");
+    r.commit_all("landed commit");
+    let landed = r.sl(&["log", "-r", ".", "-T", "{node}"]);
+    r.sl(&["rebase", "-q", "-s", &node, "-d", &landed]);
+    let rebased = r.sl(&["log", "-r", &format!("successors({node}) - obsolete()"), "-T", "{node}"]);
+    assert_ne!(rebased, node, "the rebase replaces the node");
+
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+
+    assert_eq!(
+        app.branch_tip.as_ref().map(|t| t.oid.as_str()),
+        Some(rebased.as_str()),
+        "the pick follows its successor"
+    );
+    assert_eq!(
+        app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+        ["second.txt"],
+        "the landed commit is under the base, not inside the review"
+    );
+    let want = format!("vs {} → {}", &landed[..7], &rebased[..7]);
+    assert!(painted(&app).contains(&want), "the header names the new parent; wanted {want:?}");
+}
+
+#[test]
 fn a_pick_on_the_root_commit_is_skipped_for_want_of_a_parent() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");
