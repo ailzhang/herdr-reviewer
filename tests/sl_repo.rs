@@ -163,6 +163,24 @@ fn a_digit_only_spelling_never_resolves_as_a_local_revision_number() {
 }
 
 #[test]
+fn a_bookmark_spelled_in_hex_resolves_as_a_bookmark() {
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "a\n");
+    r.commit_all("first");
+    let first = r.parent();
+    r.write("a.txt", "b\n");
+    r.commit_all("second");
+    // Behind `.`, so a resolution that quietly answered the working-copy parent instead
+    // would read as a pass.
+    r.sl(&["bookmark", "-r", &first, "beef"]);
+    // The picker lists this bookmark, so the pick it records has to resolve. Fenced
+    // inside `id()` a hex-shaped name reads as a hash prefix and answers nothing, and
+    // the pick would go dormant the moment it was made (`specs/sapling.md` Scopes).
+    let hit = vcs::resolve_spelling(VcsKind::Sapling, &r.root(), "beef").unwrap();
+    assert_eq!(hit.expect("the bookmark resolves").oid(), first);
+}
+
+#[test]
 fn a_rename_carries_its_previous_path() {
     let r = sl_repo_or_skip!();
     r.write("old.txt", "keep this line\n");

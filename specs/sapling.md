@@ -129,8 +129,10 @@ branch); only the sources adapt:
   on it, and the picker probes per keystroke while a dormant pick probes per poll.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching
   no row says `no commits match`.
-- A hex-shaped spelling resolves as a hash prefix, never as a local revision number —
-  bare in a revset, `123456` names a decade-old commit.
+- A digit-only spelling resolves as a hash prefix, never as a local revision number. Bare in
+  a revset, `123456` names a decade-old commit.
+- Every other spelling resolves as Sapling resolves it bare, so a bookmark named `beef`
+  resolves as that bookmark rather than as a hash prefix.
 - Every node the pane names paints at twelve hex, Sapling's short-node width, never git's
   seven.
 - A typed hash prefix records the whole node it resolved to. A typed name records itself

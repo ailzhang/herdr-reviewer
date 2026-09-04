@@ -455,10 +455,11 @@ fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>,
     Ok((!line.is_empty()).then_some(line))
 }
 
-/// The bounded revset one spelling probes. Digit-only always routes through `id()`
-/// whatever its length — bare, even `12` is a revnum. Mixed hex routes through `id()`
-/// from git's own abbreviation floor, so a three-letter bookmark named `abc` still
-/// resolves as a name.
+/// The bounded revset one spelling probes. Only digit-only routes through `id()`, which
+/// reads it as a hash prefix: bare, even `12` is a local revision number and pins whatever
+/// commit that numbered a decade ago. Every other spelling goes bare, so one probe answers
+/// a bookmark and a hash prefix alike, and a bookmark named `beef` is not unreachable for
+/// being spelled in hex (`specs/sapling.md` Scopes).
 ///
 /// `present()` holds the name inside the revset. A bare unknown symbol that looks like a
 /// remote one is pulled from the remote before Sapling gives up on it, which is a
@@ -466,17 +467,24 @@ fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>,
 /// It also turns the miss into empty output rather than an abort, which is what the
 /// chain's skip-never-error contract wants.
 fn probe_revset(spelling: &str) -> String {
-    if hex_shaped(spelling) {
+    if revnum_shaped(spelling) {
         format!("limit(present(id({spelling})), 1)")
     } else {
         format!("limit(present({spelling}), 1)")
     }
 }
 
-/// Whether [`probe_revset`] reads `spelling` as a hash prefix rather than as a name.
+/// Whether [`probe_revset`] must fence `spelling` inside `id()` to keep Sapling from
+/// reading it as a local revision number.
+fn revnum_shaped(spelling: &str) -> bool {
+    !spelling.is_empty() && spelling.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether [`complete_pick_spelling`] reads `spelling` as a hash prefix. Git's
+/// abbreviation floor, so a three-letter bookmark named `abc` records as itself.
 fn hex_shaped(spelling: &str) -> bool {
-    let all_digits = !spelling.is_empty() && spelling.bytes().all(|b| b.is_ascii_digit());
-    all_digits || (spelling.len() >= 4 && spelling.bytes().all(|b| b.is_ascii_hexdigit()))
+    revnum_shaped(spelling)
+        || (spelling.len() >= 4 && spelling.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// The spelling a typed hash prefix records: the whole node it resolved to
@@ -484,6 +492,11 @@ fn hex_shaped(spelling: &str) -> bool {
 /// ambiguous later, and an ambiguous pick is skipped, so the reviewer's pinned base would
 /// quietly become the public base. A name records as itself and keeps following its
 /// bookmark. The header paints the node abbreviated either way (`rev_paint`).
+///
+/// A bookmark resolves to a commit its own name does not prefix, so the `starts_with` test
+/// tells the two apart on its own. Only a bookmark named for a hex prefix of the very
+/// commit it points at records the node, and it records the commit the reviewer just
+/// picked.
 #[must_use]
 pub fn complete_pick_spelling(spelling: &str, oid: &str) -> String {
     if hex_shaped(spelling) && oid.starts_with(spelling) {
@@ -1245,13 +1258,15 @@ mod tests {
     }
 
     #[test]
-    fn probe_revset_reads_hex_as_a_prefix_and_names_as_names() {
+    fn probe_revset_fences_only_a_revision_number() {
         // Digit-only is a hash prefix at any length: bare, `123456` is a revnum and
         // would pin an ancient commit (`specs/sapling.md` Scopes).
         assert_eq!(probe_revset("123456"), "limit(present(id(123456)), 1)");
         assert_eq!(probe_revset("0"), "limit(present(id(0)), 1)");
-        assert_eq!(probe_revset("beef1234"), "limit(present(id(beef1234)), 1)");
-        // Short mixed hex stays a name, so a bookmark named `abc` resolves.
+        // Mixed hex goes bare, which resolves a hash prefix and a bookmark both. Under
+        // `id()` a bookmark named `beef` resolves to nothing, and the picker lists it.
+        assert_eq!(probe_revset("beef1234"), "limit(present(beef1234), 1)");
+        assert_eq!(probe_revset("beef"), "limit(present(beef), 1)");
         assert_eq!(probe_revset("abc"), "limit(present(abc), 1)");
         assert_eq!(probe_revset("master"), "limit(present(master), 1)");
         // `present()` on every name: a bare unknown one that looks remote is pulled
@@ -1292,10 +1307,15 @@ mod tests {
 
     #[test]
     fn a_picked_commit_probes_through_its_successors() {
-        // The recorded node is a hash, so it reaches `successors` through `id()` too.
+        // The recorded end reaches `successors` through the same bounded probe, so an
+        // amended or rebased commit is followed whether the pick recorded a node or a name.
         assert_eq!(
             super::successor_revset("beef1234"),
-            "limit(last(sort(successors(limit(present(id(beef1234)), 1)) - obsolete(), rev)), 1)"
+            "limit(last(sort(successors(limit(present(beef1234), 1)) - obsolete(), rev)), 1)"
+        );
+        assert_eq!(
+            super::successor_revset("123456"),
+            "limit(last(sort(successors(limit(present(id(123456)), 1)) - obsolete(), rev)), 1)"
         );
     }
 
