@@ -2388,6 +2388,17 @@ fn render_composer(frame: &mut Frame, app: &App, area: Rect) {
 mod tests {
     use super::{box_rows, caret_rowcol, composer_caret_cell_position, single_line_caret_view};
 
+    #[test]
+    fn a_stack_row_trails_its_code_review_number_when_it_has_one() {
+        let commit = |diff: &str| crate::app::BaseChoice::Commit {
+            node: "2eb84b9c1d".into(),
+            diff: diff.into(),
+            title: "fix the thing".into(),
+        };
+        assert_eq!(super::base_trail(&commit("D113340447")), "(D113340447)");
+        assert_eq!(super::base_trail(&commit("")), "(2eb84b9)");
+    }
+
     /// The production pairing: box rows built at the same width the caret maps against.
     fn caret_cell(input: &str, caret: usize, content_w: usize) -> (usize, usize) {
         let rows = box_rows(input, content_w);
@@ -3031,7 +3042,7 @@ fn row_shown(row: &crate::app::BaseChoice) -> String {
         crate::app::BaseChoice::Stack => row.name().to_string(),
         // A stack row reads as its description, elided so the `(node)` trail it records
         // stays on screen (`specs/sapling.md` Scopes).
-        crate::app::BaseChoice::Commit { node, title } => {
+        crate::app::BaseChoice::Commit { node, title, .. } => {
             if title.is_empty() {
                 git::abbreviate_oid(node)
             } else {
@@ -3053,10 +3064,14 @@ fn base_trail(row: &crate::app::BaseChoice) -> String {
             Some(abbrev) => format!("({abbrev})"),
             None => String::new(),
         },
-        // The trail abbreviates like every other painted rev, so a commit row and a rev row
-        // naming the same commit read as one id (`specs/input.md` Base picker).
-        crate::app::BaseChoice::Commit { node, title } => {
-            if title.is_empty() {
+        // A submitted commit trails its code review number, the id smartlog shows and the
+        // reviewer carries between tools. Without one the trail abbreviates like every
+        // other painted rev, so a commit row and a rev row naming the same commit read as
+        // one id (`specs/input.md` Base picker).
+        crate::app::BaseChoice::Commit { node, diff, title } => {
+            if !diff.is_empty() {
+                format!("({diff})")
+            } else if title.is_empty() {
                 String::new()
             } else {
                 format!("({})", git::abbreviate_oid(node))

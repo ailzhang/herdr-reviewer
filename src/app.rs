@@ -164,9 +164,11 @@ pub enum BaseChoice {
         oid: String,
     },
     /// A Sapling stack commit to review, against its own parent: it reads as `title` and
-    /// records `node` (`specs/sapling.md` Scopes).
+    /// records `node` (`specs/sapling.md` Scopes). `diff` is its code review number, empty
+    /// on a commit that carries none.
     Commit {
         node: String,
+        diff: String,
         title: String,
     },
     /// The row that clears the pick, so the chain falls back to its own default base. A
@@ -199,12 +201,12 @@ impl BaseChoice {
         }
     }
 
-    /// What the filter matches: the name, plus a commit row's description
-    /// (`specs/sapling.md` Scopes).
+    /// What the filter matches: the name, plus a commit row's description and code review
+    /// number (`specs/sapling.md` Scopes).
     #[must_use]
     pub fn haystack(&self) -> String {
         match self {
-            Self::Commit { node, title } => format!("{title} {node}"),
+            Self::Commit { node, diff, title } => format!("{title} {node} {diff}"),
             other => other.name().to_string(),
         }
     }
@@ -4211,9 +4213,11 @@ impl App {
         rows.sort_by_key(|r| (!r.starred(), !r.is_default()));
         if self.vcs == crate::vcs::VcsKind::Sapling {
             match crate::vcs::list_stack(self.vcs, &self.repo) {
-                Ok(stack) => rows.extend(
-                    stack.into_iter().map(|c| BaseChoice::Commit { node: c.node, title: c.title }),
-                ),
+                Ok(stack) => rows.extend(stack.into_iter().map(|c| BaseChoice::Commit {
+                    node: c.node,
+                    diff: c.diff,
+                    title: c.title,
+                })),
                 Err(e) => {
                     self.status = e.0;
                     return;
@@ -4559,6 +4563,27 @@ mod tests {
     use crate::config::NavigatorPosition;
     use crate::model::{Comment, Scope, Side};
     use std::path::PathBuf;
+
+    #[test]
+    fn a_stack_row_filters_on_its_code_review_number() {
+        // `D113340447` is the id a reviewer carries over from smartlog, and `id()` cannot
+        // resolve it, so the row itself has to match it (`specs/sapling.md` Scopes).
+        let row = super::BaseChoice::Commit {
+            node: "2eb84b9".into(),
+            diff: "D113340447".into(),
+            title: "fix the thing".into(),
+        };
+        let hay = row.haystack();
+        assert!(hay.contains("D113340447"), "{hay}");
+        assert!(hay.contains("fix the thing") && hay.contains("2eb84b9"), "{hay}");
+        // A commit with no review number still matches on its description and node.
+        let bare = super::BaseChoice::Commit {
+            node: "2eb84b9".into(),
+            diff: String::new(),
+            title: "fix the thing".into(),
+        };
+        assert_eq!(bare.haystack().trim(), "fix the thing 2eb84b9");
+    }
 
     #[test]
     fn a_pr_settled_highlight_survives_a_kept_snapshot_and_blanks_on_a_replace() {

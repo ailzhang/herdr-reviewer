@@ -587,11 +587,14 @@ pub fn list_bookmarks(root: &Path) -> Result<Vec<String>, GitFail> {
         .collect())
 }
 
-/// One stack commit offered by the base picker: the short node it records, and the
-/// description's first line it reads as (`specs/sapling.md` Scopes).
+/// One stack commit offered by the base picker: the short node it records, the code
+/// review number it carries, and the description's first line it reads as
+/// (`specs/sapling.md` Scopes). `diff` is empty on a commit that has none, and on every
+/// commit in a repository whose Sapling has no code review integration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackCommit {
     pub node: String,
+    pub diff: String,
     pub title: String,
 }
 
@@ -601,7 +604,8 @@ pub struct StackCommit {
 /// the reviewer just came from. Draft-only keeps this O(stack) (`SL-SCALE-CHANGED`).
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
     let revset = "sort(draft() & ((::.) + (.::)), -rev)";
-    let args = ["log", "-r", revset, "-T", "{node|short}\t{desc|firstline}\n"];
+    // The review number rides the same template, so the picker still costs one spawn.
+    let args = ["log", "-r", revset, "-T", "{node|short}\t{phabdiff}\t{desc|firstline}\n"];
     let out = sl_out(root, &args).map_err(|e| GitFail(format!("{}: {e}", cmdline(&args))))?;
     if !out.status.success() {
         return Err(GitFail(format!(
@@ -613,12 +617,18 @@ pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|line| {
-            let (node, title) = line.split_once('\t')?;
-            let node = node.trim();
+            let mut fields = line.splitn(3, '\t');
+            let node = fields.next()?.trim();
+            let diff = fields.next()?.trim();
+            let title = fields.next()?.trim();
             if node.is_empty() {
                 return None;
             }
-            Some(StackCommit { node: node.to_string(), title: title.trim().to_string() })
+            Some(StackCommit {
+                node: node.to_string(),
+                diff: diff.to_string(),
+                title: title.to_string(),
+            })
         })
         .collect())
 }

@@ -104,8 +104,11 @@ branch); only the sources adapt:
   successor is a root commit with no parent to diff against.
 - A dormant pick names a node abbreviated, `2eb84b9 missing`, and a bookmark name whole. The
   recorded spelling is all 40 hex digits, which would fill the header.
-- A commit row reads as its description's first line and is marked with the short hash it
-  records. The filter matches the description and the hash.
+- A commit row reads as its description's first line. It is marked with its code review
+  number, and with the short hash it records when it carries no number. The filter matches
+  the description, the hash, and the number.
+- A typed code review number matches the stack rows, never a live revision probe. Sapling
+  pulls an unknown bare symbol from the remote, and `SL-NO-REPO-WRITES` forbids the write.
 - The picker names commits, not branches: its title is `Pick base commit` and a filter matching
   no row says `no commits match`.
 - A hex-shaped spelling resolves as a hash prefix, never as a local revision number —
