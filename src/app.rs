@@ -1385,6 +1385,7 @@ impl App {
         }
         self.rebuild_visible();
         self.settle_read();
+        self.warm_neighbours();
     }
 
     /// Build the File view for `path`: its current worktree content as `Context` rows, no
@@ -1503,40 +1504,65 @@ impl App {
     fn content_sides(&self, path: &str, previous_path: Option<&str>) -> (String, String) {
         let new_path = path;
         let old_path = previous_path.unwrap_or(new_path);
+        let old = self
+            .old_side_rev()
+            .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
+            .unwrap_or_default();
+        // A pinned far end diffs commit to commit, so the new side reads from that commit
+        // rather than from the worktree (`specs/sapling.md` Scopes).
+        let new = match (&self.branch_tip, self.scope) {
+            (Some(tip), Scope::Branch) => {
+                crate::vcs::file_content(self.vcs, &self.repo, &tip.oid, new_path)
+            }
+            _ => worktree_content(&self.repo, new_path),
+        };
+        (old, new)
+    }
+
+    /// The revision the open file's old side reads at, and `None` when the scope has no base
+    /// to read from. One derivation, shared by the diff build and the neighbour warm, so the
+    /// warm can never fill the cache under a key the build will not ask for.
+    fn old_side_rev(&self) -> Option<String> {
         match self.scope {
-            Scope::Uncommitted => {
-                let base = crate::vcs::uncommitted_base(self.vcs);
-                let old = crate::vcs::file_content(self.vcs, &self.repo, base, old_path);
-                let new = worktree_content(&self.repo, new_path);
-                (old, new)
-            }
+            Scope::Uncommitted => Some(crate::vcs::uncommitted_base(self.vcs).to_string()),
             Scope::Branch => {
-                let base = self.branch_base.winner.as_ref().map(git::ResolvedBase::oid);
-                // A pinned far end diffs commit to commit: the base is that commit's own
-                // parent, so no merge base stands between the two, and the new side reads
-                // from the commit rather than the worktree (`specs/sapling.md` Scopes).
-                let from = match (&self.branch_tip, base) {
-                    (Some(_), Some(oid)) => Some(oid.to_string()),
-                    (None, Some(oid)) => crate::vcs::merge_base(self.vcs, &self.repo, oid),
-                    (_, None) => None,
-                };
-                let old = from
-                    .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
-                    .unwrap_or_default();
-                let new = match &self.branch_tip {
-                    Some(tip) => crate::vcs::file_content(self.vcs, &self.repo, &tip.oid, new_path),
-                    None => worktree_content(&self.repo, new_path),
-                };
-                (old, new)
+                let base = self.branch_base.winner.as_ref().map(git::ResolvedBase::oid)?;
+                // A pinned far end's base is that commit's own parent, so no merge base
+                // stands between the two.
+                match self.branch_tip {
+                    Some(_) => Some(base.to_string()),
+                    None => crate::vcs::merge_base(self.vcs, &self.repo, base),
+                }
             }
-            Scope::LastTurn => {
-                let old = self
-                    .turn_baseline
-                    .as_deref()
-                    .map(|b| crate::vcs::file_content(self.vcs, &self.repo, b, old_path))
-                    .unwrap_or_default();
-                (old, worktree_content(&self.repo, new_path))
-            }
+            Scope::LastTurn => self.turn_baseline.clone(),
+        }
+    }
+
+    /// Read the neighbouring files' old sides into the backend's cache, off the frame loop.
+    /// The file cursor opens a diff on every move, and in a Sapling monorepo one old side is
+    /// a third of a second of `sl cat`, so without this every arrow key down the list freezes
+    /// the pane (`specs/sapling.md` Reads).
+    fn warm_neighbours(&self) {
+        /// How far either way from the cursor to read ahead.
+        const WINDOW: usize = 3;
+        if self.tab != Tab::Changes {
+            return;
+        }
+        let Some(rev) = self.old_side_rev() else { return };
+        // Nearest first, so a queue the reviewer outran drops the far end of the window
+        // rather than the row they are about to land on.
+        let mut near: Vec<(usize, usize)> = self
+            .file_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(row, r)| Some((row.abs_diff(self.file_cursor), r.file_index()?)))
+            .filter(|(gap, _)| (1..=WINDOW).contains(gap))
+            .collect();
+        near.sort_unstable();
+        for (_, index) in near {
+            let Some(entry) = self.entries.get(index) else { continue };
+            let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
+            crate::vcs::warm_content(self.vcs, &self.repo, &rev, path);
         }
     }
 

@@ -749,6 +749,33 @@ fn cat_lossy(root: &Path, rev: &str, path: &str) -> String {
         .unwrap_or_default()
 }
 
+/// One queued warm: the worktree, the revision, and the path.
+type WarmRequest = (std::path::PathBuf, String, String);
+
+/// The warm queue's sender. One worker thread serves every pane in the process, and the
+/// queue is short on purpose: a reviewer who outran the reads has moved past the far end
+/// of the window, so a dropped request was for a file they are no longer about to open.
+fn warm_queue() -> &'static std::sync::mpsc::SyncSender<WarmRequest> {
+    static QUEUE: std::sync::OnceLock<std::sync::mpsc::SyncSender<WarmRequest>> =
+        std::sync::OnceLock::new();
+    QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WarmRequest>(8);
+        std::thread::spawn(move || {
+            while let Ok((root, rev, path)) = rx.recv() {
+                let _ = file_content(&root, &rev, &path);
+            }
+        });
+        tx
+    })
+}
+
+/// Read one file's old side into the content cache, off the frame loop. The reviewer's
+/// next arrow key then costs a map lookup rather than a `sl cat` (`specs/sapling.md`
+/// Reads).
+pub fn warm_content(root: &Path, rev: &str, path: &str) {
+    let _ = warm_queue().try_send((root.to_path_buf(), rev.to_string(), path.to_string()));
+}
+
 /// `sl cat -r <rev> <path>` through the immutable-content cache: a commit's file
 /// content never changes, so a hit can never be stale, and the frame loop's old-side
 /// reads skip the command-dispatch floor after the first. Exit 1 is absence

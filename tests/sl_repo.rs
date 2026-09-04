@@ -181,6 +181,24 @@ fn a_bookmark_spelled_in_hex_resolves_as_a_bookmark() {
 }
 
 #[test]
+fn a_neighbours_old_side_reads_ahead_of_the_reviewer() {
+    use std::time::{Duration, Instant};
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("base");
+    let (root, rev) = (r.root(), r.parent());
+    vcs::warm_content(VcsKind::Sapling, &root, &rev, "a.txt");
+    // `sl cat` costs ~180ms in a repo this size and a third of a second in a monorepo. The
+    // read runs off the frame loop, so by the time the cursor lands the content is there.
+    std::thread::sleep(Duration::from_millis(700));
+    let started = Instant::now();
+    let got = vcs::file_content(VcsKind::Sapling, &root, &rev, "a.txt");
+    let took = started.elapsed();
+    assert_eq!(got, "one\n");
+    assert!(took < Duration::from_millis(20), "the old side was not warmed: {took:?}");
+}
+
+#[test]
 fn a_rename_carries_its_previous_path() {
     let r = sl_repo_or_skip!();
     r.write("old.txt", "keep this line\n");

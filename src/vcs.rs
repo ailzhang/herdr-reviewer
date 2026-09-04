@@ -131,6 +131,16 @@ pub fn uncommitted_base(kind: VcsKind) -> &'static str {
     }
 }
 
+/// Read one file's old side into the backend's content cache ahead of the reviewer opening
+/// it. Git reads a blob in single-digit milliseconds, so it warms nothing
+/// (`specs/sapling.md` Reads).
+pub fn warm_content(kind: VcsKind, root: &Path, rev: &str, path: &str) {
+    match kind {
+        VcsKind::Git => (),
+        VcsKind::Sapling => sl::warm_content(root, rev, path),
+    }
+}
+
 /// The merge-base commit of the resolved base and the working copy
 /// (`specs/review-model.md` Base branch).
 pub fn merge_base(kind: VcsKind, root: &Path, base_oid: &str) -> Option<String> {
