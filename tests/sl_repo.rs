@@ -866,3 +866,57 @@ fn last_turn_diffs_a_sapling_worktree_against_the_snapshot_baseline() {
     let baseline = baseline.expect("a baseline");
     assert_eq!(vcs::file_content(VcsKind::Sapling, &root, &baseline, "a.txt"), "one\n");
 }
+
+#[test]
+fn a_turn_start_dirty_file_the_agent_renamed_stays_one_row() {
+    let r = sl_repo_or_skip!();
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    r.write("old.txt", "one\n");
+    r.commit_all("base");
+    // Dirty at the turn start, so its baseline side lives in the store rather than in the
+    // parent commit. The `R old.txt` record still comes from the status pass, and the two
+    // have to meet (`specs/sapling.md` The snapshot store).
+    r.write("old.txt", "one\ntwo\n");
+    let mut turn = herdr_reviewr::sl::TurnStore::open(root.clone());
+    let candidate = turn.snapshot().unwrap();
+    turn.pin_candidate(&candidate);
+    turn.persist_baseline(&candidate).unwrap();
+    r.sl(&["mv", "old.txt", "new.txt"]);
+    r.write("new.txt", "one\ntwo\nthree\n");
+    let files = vcs::changed_against_tree(VcsKind::Sapling, &root, &candidate).unwrap();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].path, "new.txt");
+    assert_eq!(files[0].kind, ChangeKind::Renamed);
+    assert_eq!(files[0].previous_path.as_deref(), Some("old.txt"));
+    // Counted against the stored bytes, never against the parent commit: the turn added
+    // the third line alone.
+    assert_eq!((files[0].additions, files[0].deletions), (1, 0));
+    // The old side is the turn-start content, so the pane diffs what the turn changed.
+    assert_eq!(vcs::file_content(VcsKind::Sapling, &root, &candidate, "old.txt"), "one\ntwo\n");
+}
+
+#[test]
+fn a_rename_onto_a_turn_start_dirty_file_keeps_both_rows() {
+    let r = sl_repo_or_skip!();
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    r.write("old.txt", "from old\n");
+    r.write("onto.txt", "committed\n");
+    r.commit_all("base");
+    r.write("onto.txt", "dirty at the turn start\n");
+    let mut turn = herdr_reviewr::sl::TurnStore::open(root.clone());
+    let candidate = turn.snapshot().unwrap();
+    turn.pin_candidate(&candidate);
+    turn.persist_baseline(&candidate).unwrap();
+    r.sl(&["mv", "-f", "old.txt", "onto.txt"]);
+    let files = vcs::changed_against_tree(VcsKind::Sapling, &root, &candidate).unwrap();
+    // Pairing these would throw away the destination's own baseline side, so the move
+    // reads as the source leaving and the destination changing.
+    let names: Vec<(&str, ChangeKind)> = files.iter().map(|f| (f.path.as_str(), f.kind)).collect();
+    assert_eq!(names, vec![("old.txt", ChangeKind::Deleted), ("onto.txt", ChangeKind::Modified)]);
+    assert_eq!(
+        vcs::file_content(VcsKind::Sapling, &root, &candidate, "onto.txt"),
+        "dirty at the turn start\n"
+    );
+}

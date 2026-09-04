@@ -1168,6 +1168,25 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
         .load_manifest(id)
         .with_context(|| format!("turn baseline {id} is missing from the snapshot store"))?;
     let now = status_entries(root, Some(&manifest.parent), None)?;
+    let all: Vec<&StatusEntry> = now.iter().collect();
+    let renamed = rename_sources(&all);
+    // Every rename this pass pairs, source to destination. The pairing is decided over the
+    // whole status, not over the fresh files alone: a turn-start-dirty file the agent then
+    // renamed has its `R` record here and its baseline side in the manifest, so neither loop
+    // can pair it from what it sees on its own.
+    //
+    // A move onto a turn-start-dirty path stays unpaired. That destination has a baseline
+    // side of its own, which the manifest loop answers against; pairing would throw it away.
+    let moved_to: std::collections::HashMap<&str, &str> = now
+        .iter()
+        .filter(|e| e.status == "A")
+        .filter_map(|e| Some((e.copy.as_deref()?, e.path.as_str())))
+        .filter(|(source, dest)| {
+            renamed.contains(source)
+                && !manifest.files.contains_key(*dest)
+                && manifest.files.get(*source).is_none_or(Option::is_some)
+        })
+        .collect();
     let mut out = Vec::new();
     // The turn-start-dirty files: the stored bytes are the baseline side.
     for (path, base_hash) in &manifest.files {
@@ -1179,37 +1198,49 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
             ),
             None => None,
         };
-        let current: Option<Vec<u8>> = std::fs::read(root.join(path)).ok();
+        // A move out of this file reads its new side at the destination, so the two make one
+        // renamed row rather than a whole delete plus a whole add.
+        let dest = moved_to.get(path.as_str()).copied();
+        let current: Option<Vec<u8>> = std::fs::read(root.join(dest.unwrap_or(path))).ok();
         let (kind, additions, deletions) = match (&base, &current) {
             (None, None) => continue,
-            (Some(b), Some(c)) if b == c => continue,
             (None, Some(c)) => (ChangeKind::Added, crate::vcs::text_line_count(c), 0),
             (Some(b), None) => (ChangeKind::Deleted, 0, crate::vcs::text_line_count(b)),
+            // Ahead of the unchanged-content skip: a move with no edit is still a change.
+            (Some(b), Some(c)) if dest.is_some() => {
+                let (add, del) = text_counts(b, c);
+                (ChangeKind::Renamed, add, del)
+            }
+            (Some(b), Some(c)) if b == c => continue,
             (Some(b), Some(c)) => {
                 let (add, del) = text_counts(b, c);
                 (ChangeKind::Modified, add, del)
             }
         };
+        let moved = kind == ChangeKind::Renamed;
         out.push(ChangedFile {
-            path: path.clone(),
+            path: if moved { dest.unwrap_or(path).to_string() } else { path.clone() },
             kind,
             additions,
             deletions,
-            previous_path: None,
+            previous_path: moved.then(|| path.clone()),
         });
     }
     // The files the turn touched from a clean start: kinds from the status, counts
     // from one diff spawn. A rename's source row folds exactly as in `changed_set`.
-    let fresh: Vec<&StatusEntry> =
-        now.iter().filter(|e| !manifest.files.contains_key(&e.path)).collect();
+    let claimed: std::collections::HashSet<&str> =
+        manifest.files.keys().filter_map(|p| moved_to.get(p.as_str()).copied()).collect();
+    let fresh: Vec<&StatusEntry> = now
+        .iter()
+        .filter(|e| !manifest.files.contains_key(&e.path) && !claimed.contains(e.path.as_str()))
+        .collect();
     if !fresh.is_empty() {
         let counts =
             diff_counts(&sl(root, &["diff", "--git", "--no-binary", "-r", &manifest.parent])?);
-        let renamed = rename_sources(&fresh);
         for entry in fresh {
-            let source = entry.copy.as_deref().filter(|s| renamed.contains(s));
+            let source = entry.copy.as_deref().filter(|s| moved_to.contains_key(s));
             let Some(kind) = kind_of(entry, source.is_some()) else { continue };
-            if kind == ChangeKind::Deleted && renamed.contains(entry.path.as_str()) {
+            if kind == ChangeKind::Deleted && moved_to.contains_key(entry.path.as_str()) {
                 continue;
             }
             // The baseline has no untracked concept: a file created during the turn is
