@@ -155,7 +155,8 @@ a revision is `sl cat -r`; exit 1 is absence, read as empty content. A side the 
 calls absent is never read. An added or untracked file has no old side, and a deleted file has no
 new side. A commit's content never
 changes, so a read caches, and the files within three rows of the cursor read ahead on a worker
-thread. The file cursor opens a diff on every move, and one uncached side is a third of a
+thread. A cache over its budget drops its least recently read entries, never its newest, so the
+file on screen outlives a walk down the list. The file cursor opens a diff on every move, and one uncached side is a third of a
 second. A range that ends at a pinned commit reads ahead on both sides, and one that ends at the
 working copy reads ahead on the old side alone. Counts for `uncommitted`
 and `branch` parse one `sl diff --git --no-binary` per build. That spawn is skipped when the

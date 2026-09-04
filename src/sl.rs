@@ -860,7 +860,7 @@ pub fn warm_content(root: &Path, rev: &str, path: &str) {
 /// (`specs/sapling.md` Reads).
 fn cat_cached(root: &Path, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
     let key = (rev.to_string(), path.to_string());
-    if let Some(hit) = cat_cache().lock().unwrap().get(&key) {
+    if let Some(hit) = cat_hit(&mut cat_cache().lock().unwrap(), &key) {
         return Ok(hit.clone());
     }
     let args = ["cat", "-r", rev, "--", path];
@@ -873,18 +873,66 @@ fn cat_cached(root: &Path, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
         bail!("{} failed: {}", cmdline(&args), String::from_utf8_lossy(&out.stderr).trim());
     };
     let mut cache = cat_cache().lock().unwrap();
-    // Bound both entries and bytes — cached monorepo files are not small. A wholesale
-    // clear repopulates from immutable content, so it can never serve a wrong answer.
-    let bytes: usize = cache.values().flatten().map(Vec::len).sum();
-    if cache.len() >= 256 || bytes >= 64 * 1024 * 1024 {
-        cache.clear();
-    }
-    cache.insert(key, content.clone());
+    cache.insert(key, (next_read(), content.clone()));
+    trim_cat_cache(&mut cache);
     Ok(content)
 }
 
-fn cat_cache() -> &'static PinnedCache<Vec<u8>> {
-    static CACHE: OnceLock<PinnedCache<Vec<u8>>> = OnceLock::new();
+/// Serve `key` from the content cache, recording the read so eviction ranks the entry newest.
+/// The open file is served here at every poll landing, which is what keeps it ahead of the
+/// files a walk down the list read once (`specs/sapling.md` Reads).
+/// The held answer is itself an `Option`, since a path absent at the revision caches as
+/// absence, so the hit is handed back by reference to keep the two apart.
+fn cat_hit<'a>(cache: &'a mut CatMap, key: &(String, String)) -> Option<&'a Option<Vec<u8>>> {
+    let (seen, content) = cache.get_mut(key)?;
+    *seen = next_read();
+    Some(content)
+}
+
+/// The most entries the content cache holds, and the most bytes. Cached monorepo files are
+/// not small, so neither bound alone holds the cache down.
+const CAT_MAX_ENTRIES: usize = 256;
+const CAT_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Drop least-recently-read entries until the cache is inside both budgets, never the entry
+/// read most recently. The open file is re-read at every poll landing, so it carries the
+/// newest touch and outlives the walk down the file list that filled the cache. Dropping the
+/// whole cache instead would drop that entry too, and the next landing would pay `sl cat` on
+/// the frame loop for the one file on screen (`specs/sapling.md` Reads).
+fn trim_cat_cache(cache: &mut CatMap) {
+    let mut bytes: usize = cache.values().filter_map(|(_, v)| v.as_ref()).map(Vec::len).sum();
+    if cache.len() <= CAT_MAX_ENTRIES && bytes <= CAT_MAX_BYTES {
+        return;
+    }
+    let mut order: Vec<((String, String), u64)> =
+        cache.iter().map(|(k, (seen, _))| (k.clone(), *seen)).collect();
+    order.sort_unstable_by_key(|(_, seen)| *seen);
+    // Keeping the newest is what bounds a single file larger than the byte budget: it caches
+    // alone rather than re-reading on every poll.
+    order.pop();
+    for (key, _) in order {
+        if cache.len() <= CAT_MAX_ENTRIES && bytes <= CAT_MAX_BYTES {
+            return;
+        }
+        if let Some((_, content)) = cache.remove(&key) {
+            bytes -= content.map_or(0, |c| c.len());
+        }
+    }
+}
+
+/// A read counter, so eviction can order entries by when each was last served. It only ever
+/// increases, so a wrap would need a hundred million reads a second for five thousand years.
+fn next_read() -> u64 {
+    static READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The content cache's map: an immutable answer per (revision, path), with the read that
+/// last served it.
+type CatMap = HashMap<(String, String), (u64, Option<Vec<u8>>)>;
+
+fn cat_cache() -> &'static Mutex<CatMap> {
+    static CACHE: OnceLock<Mutex<CatMap>> = OnceLock::new();
     CACHE.get_or_init(Mutex::default)
 }
 
@@ -1380,9 +1428,71 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
 #[cfg(test)]
 mod tests {
     use super::{
-        Manifest, Pending, Store, abbreviate_node, cmdline, complete_pick_spelling, diff_counts,
-        probe_revset, text_counts,
+        CAT_MAX_BYTES, CAT_MAX_ENTRIES, CatMap, Manifest, Pending, Store, abbreviate_node, cat_hit,
+        cmdline, complete_pick_spelling, diff_counts, next_read, probe_revset, text_counts,
+        trim_cat_cache,
     };
+
+    /// A cache of `n` entries of `len` bytes each, read in path order, so entry `0` is the
+    /// least recently read and entry `n - 1` the most. The reads come from the counter the
+    /// cache itself uses, so a later `cat_hit` ranks above every one of them.
+    fn cat_map(n: usize, len: usize) -> CatMap {
+        (0..n)
+            .map(|i| {
+                (("node".to_string(), format!("f{i:04}")), (next_read(), Some(vec![b'x'; len])))
+            })
+            .collect()
+    }
+
+    fn paths(cache: &CatMap) -> Vec<String> {
+        let mut names: Vec<String> = cache.keys().map(|(_, p)| p.clone()).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_content_cache_evicts_the_least_recently_read_and_keeps_the_open_file() {
+        // The open file is re-read at every poll landing, so it always carries the newest
+        // touch. A wholesale clear dropped it with the rest, and the next landing paid
+        // `sl cat` on the frame loop for the one file on screen (`specs/sapling.md` Reads).
+        let mut cache = cat_map(CAT_MAX_ENTRIES + 3, 1);
+        trim_cat_cache(&mut cache);
+        assert_eq!(cache.len(), CAT_MAX_ENTRIES, "trimmed to the entry budget, not emptied");
+        assert!(!paths(&cache).contains(&"f0000".to_string()), "the oldest three go");
+        assert!(!paths(&cache).contains(&"f0002".to_string()));
+        let newest = format!("f{:04}", CAT_MAX_ENTRIES + 2);
+        assert!(paths(&cache).contains(&newest), "the newest touch stays");
+
+        // The byte budget bites first when the files are large.
+        let mut cache = cat_map(8, CAT_MAX_BYTES / 4);
+        trim_cat_cache(&mut cache);
+        assert_eq!(paths(&cache), ["f0004", "f0005", "f0006", "f0007"], "the four newest fit");
+
+        // One file over the whole budget caches alone rather than re-reading every poll.
+        let mut cache = cat_map(3, 1);
+        let huge = (next_read(), Some(vec![b'x'; CAT_MAX_BYTES + 1]));
+        cache.insert(("node".into(), "huge".into()), huge);
+        trim_cat_cache(&mut cache);
+        assert_eq!(paths(&cache), ["huge"]);
+
+        // A cache inside both budgets is left whole.
+        let mut cache = cat_map(4, 1);
+        trim_cat_cache(&mut cache);
+        assert_eq!(cache.len(), 4);
+    }
+
+    #[test]
+    fn a_file_read_again_outlives_the_walk_that_filled_the_cache() {
+        // The reviewer opens a file, then walks the whole list past it. Every poll landing
+        // re-reads the open file, and that read is what carries it over the walk's entries
+        // (`specs/sapling.md` Reads).
+        let open = ("node".to_string(), "f0000".to_string());
+        let mut cache = cat_map(CAT_MAX_ENTRIES + 1, 1);
+        assert!(cat_hit(&mut cache, &open).is_some(), "the landing serves the open file");
+        trim_cat_cache(&mut cache);
+        assert!(paths(&cache).contains(&"f0000".to_string()), "the open file stays");
+        assert!(!paths(&cache).contains(&"f0001".to_string()), "the next-oldest goes instead");
+    }
 
     #[test]
     fn a_failed_command_names_itself_the_way_it_would_be_typed() {
