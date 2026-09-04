@@ -24,11 +24,30 @@ fn sl_out(root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
     crate::proc::command("sl").current_dir(root).env("HGPLAIN", "1").args(args).output()
 }
 
+/// A failed command names itself the way it would be typed, `sl status -mardu -C -Tjson`,
+/// because this text is what the status line shows the reviewer (`specs/sapling.md`
+/// Failure semantics). An argument carrying whitespace or a control character prints
+/// quoted and escaped, so a template's literal newline cannot break the line in two.
+fn cmdline(args: &[&str]) -> String {
+    let mut out = String::from("sl");
+    for arg in args {
+        out.push(' ');
+        if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            out.push('\'');
+            out.extend(arg.escape_debug());
+            out.push('\'');
+        } else {
+            out.push_str(arg);
+        }
+    }
+    out
+}
+
 /// Run `sl <args>` and return stdout. Errors on non-zero exit.
 fn sl(root: &Path, args: &[&str]) -> Result<String> {
-    let out = sl_out(root, args).with_context(|| format!("running sl {args:?}"))?;
+    let out = sl_out(root, args).with_context(|| format!("running {}", cmdline(args)))?;
     if !out.status.success() {
-        bail!("sl {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!("{} failed: {}", cmdline(args), String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -395,7 +414,7 @@ fn log_node(root: &Path, revset: &str) -> Result<Option<String>, GitFail> {
 /// that needs two facts about one commit asks for both in one template.
 fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>, GitFail> {
     let args = ["log", "-r", revset, "-T", template];
-    let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
+    let out = sl_out(root, &args).map_err(|e| GitFail(format!("{}: {e}", cmdline(&args))))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         // An unknown name, an unparsable revset, or an ambiguous prefix is a clean
@@ -408,7 +427,7 @@ fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>,
         {
             return Ok(None);
         }
-        return Err(GitFail(format!("sl {args:?}: {}", stderr.trim())));
+        return Err(GitFail(format!("{}: {}", cmdline(&args), stderr.trim())));
     }
     let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok((!line.is_empty()).then_some(line))
@@ -552,10 +571,11 @@ pub fn resolve_spelling(root: &Path, spelling: &str) -> Result<Option<ResolvedBa
 /// without bookmarks lists nothing; the typed spelling is the usual path to a pick.
 pub fn list_bookmarks(root: &Path) -> Result<Vec<String>, GitFail> {
     let args = ["bookmarks", "-T", "{bookmark}\n"];
-    let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
+    let out = sl_out(root, &args).map_err(|e| GitFail(format!("{}: {e}", cmdline(&args))))?;
     if !out.status.success() {
         return Err(GitFail(format!(
-            "sl {args:?}: {}",
+            "{}: {}",
+            cmdline(&args),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
@@ -582,10 +602,11 @@ pub struct StackCommit {
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
     let revset = "sort(draft() & ((::.) + (.::)), -rev)";
     let args = ["log", "-r", revset, "-T", "{node|short}\t{desc|firstline}\n"];
-    let out = sl_out(root, &args).map_err(|e| GitFail(format!("sl {args:?}: {e}")))?;
+    let out = sl_out(root, &args).map_err(|e| GitFail(format!("{}: {e}", cmdline(&args))))?;
     if !out.status.success() {
         return Err(GitFail(format!(
-            "sl {args:?}: {}",
+            "{}: {}",
+            cmdline(&args),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
@@ -654,13 +675,13 @@ fn cat_cached(root: &Path, rev: &str, path: &str) -> Result<Option<Vec<u8>>> {
         return Ok(hit.clone());
     }
     let args = ["cat", "-r", rev, "--", path];
-    let out = sl_out(root, &args).with_context(|| format!("running sl {args:?}"))?;
+    let out = sl_out(root, &args).with_context(|| format!("running {}", cmdline(&args)))?;
     let content = if out.status.success() {
         Some(out.stdout)
     } else if out.status.code() == Some(1) {
         None
     } else {
-        bail!("sl {args:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!("{} failed: {}", cmdline(&args), String::from_utf8_lossy(&out.stderr).trim());
     };
     let mut cache = cat_cache().lock().unwrap();
     // Bound both entries and bytes — cached monorepo files are not small. A wholesale
@@ -1111,7 +1132,17 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
 
 #[cfg(test)]
 mod tests {
-    use super::{Manifest, Pending, Store, diff_counts, probe_revset, text_counts};
+    use super::{Manifest, Pending, Store, cmdline, diff_counts, probe_revset, text_counts};
+
+    #[test]
+    fn a_failed_command_names_itself_the_way_it_would_be_typed() {
+        assert_eq!(cmdline(&["status", "-mardu", "-C", "-Tjson"]), "sl status -mardu -C -Tjson");
+        // A template's tab and newline would otherwise break the status line in two.
+        assert_eq!(
+            cmdline(&["log", "-r", "draft() & ::.", "-T", "{node}\t{desc}\n"]),
+            r"sl log -r 'draft() & ::.' -T '{node}\t{desc}\n'"
+        );
+    }
 
     #[test]
     fn probe_revset_reads_hex_as_a_prefix_and_names_as_names() {
