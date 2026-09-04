@@ -897,6 +897,10 @@ impl Store {
     /// just-written baseline plus the [`KEPT_MANIFESTS`] most recent others survive —
     /// a sibling pane of the same worktree keeps its own live baseline even after this
     /// pane promotes, at the cost of a bounded tail of old snapshots.
+    ///
+    /// Every step keeps on doubt. A sweep that cannot prove a blob dead leaves it for the
+    /// next promotion, because the loss it would otherwise take is a live baseline's
+    /// content, and the loss it takes instead is one round of disk.
     fn prune(&self, keep_id: &str) {
         const KEPT_MANIFESTS: usize = 4;
         let keep_manifest = self.manifest_path(keep_id);
@@ -917,23 +921,40 @@ impl Store {
         for (_, path) in others.drain(..).skip(KEPT_MANIFESTS) {
             let _ = std::fs::remove_file(path);
         }
-        // A blob survives while any kept manifest references it.
+        // A blob survives while any kept manifest references it. The sweep fails closed:
+        // one unreadable manifest, or a listing that fails, leaves live blobs unnamed, and
+        // deleting on that reading would drop the baseline the failed read was holding.
         let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
-        if let Ok(entries) = std::fs::read_dir(self.snaps_dir()) {
-            for entry in entries.flatten() {
-                let Ok(bytes) = std::fs::read(entry.path()) else { continue };
-                let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) else { continue };
-                live.extend(manifest.files.into_values().flatten());
-            }
+        let Ok(entries) = std::fs::read_dir(self.snaps_dir()) else { return };
+        for entry in entries {
+            let Ok(entry) = entry else { return };
+            let Ok(bytes) = std::fs::read(entry.path()) else { return };
+            let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) else { return };
+            live.extend(manifest.files.into_values().flatten());
         }
-        if let Ok(entries) = std::fs::read_dir(self.blobs_dir()) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if !live.contains(&name) {
-                    let _ = std::fs::remove_file(entry.path());
-                }
+        let Ok(entries) = std::fs::read_dir(self.blobs_dir()) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if live.contains(&name) || written_recently(&entry) {
+                continue;
             }
+            let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+/// Whether a blob is young enough that a sibling pane may be mid-promotion with it.
+/// Blobs land before the manifest naming them, so a blob written between a sweep's
+/// manifest scan and its blob scan is referenced by nothing on disk yet. The grace window
+/// keeps it until the next sweep, which is one promotion later (`specs/sapling.md` The
+/// snapshot store). An unreadable stat keeps the blob.
+fn written_recently(entry: &std::fs::DirEntry) -> bool {
+    const WRITE_GRACE: std::time::Duration = std::time::Duration::from_mins(1);
+    let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else { return true };
+    match std::time::SystemTime::now().duration_since(modified) {
+        Ok(age) => age < WRITE_GRACE,
+        // An mtime ahead of the clock is a skewed write, never an old blob.
+        Err(_) => true,
     }
 }
 
@@ -1360,7 +1381,47 @@ mod tests {
         assert!(store.load_manifest(&ids[5]).is_some());
         assert!(store.load_manifest(&ids[1]).is_some(), "the kept tail survives");
         assert!(store.load_manifest(&ids[0]).is_none(), "the oldest is pruned");
+        assert_eq!(
+            store.read_blob("aa00"),
+            Some(b"v0".to_vec()),
+            "a blob written this minute outlives its own manifest"
+        );
+        assert_eq!(store.read_blob("aa05"), Some(b"v5".to_vec()));
+
+        // Age every blob out of the grace window and sweep again: now the orphan goes and
+        // the live baseline's blob stays.
+        age_blobs(&store);
+        store.prune(&ids[5]);
         assert_eq!(store.read_blob("aa00"), None, "a pruned manifest's blob goes with it");
         assert_eq!(store.read_blob("aa05"), Some(b"v5".to_vec()));
+    }
+
+    #[test]
+    fn an_unreadable_manifest_stops_the_blob_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let manifest = Manifest {
+            parent: "p0".to_string(),
+            files: BTreeMap::from([("f.rs".to_string(), Some("aa11".to_string()))]),
+        };
+        let id = manifest.id();
+        let blobs = HashMap::from([("aa11".to_string(), std::sync::Arc::new(b"live".to_vec()))]);
+        store.persist(&Pending { id: id.clone(), manifest, blobs }).unwrap();
+
+        // A manifest that no longer parses still names live blobs. Sweeping on that
+        // reading would delete the content of the very baseline the pointer names.
+        std::fs::write(store.manifest_path(&id).unwrap(), b"{ truncated").unwrap();
+        age_blobs(&store);
+        store.prune(&id);
+        assert_eq!(store.read_blob("aa11"), Some(b"live".to_vec()));
+    }
+
+    /// Backdate every blob past `WRITE_GRACE`, so a sweep judges it on references alone.
+    fn age_blobs(store: &Store) {
+        let old = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
+        for entry in std::fs::read_dir(store.blobs_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            std::fs::File::options().write(true).open(path).unwrap().set_modified(old).unwrap();
+        }
     }
 }

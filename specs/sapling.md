@@ -60,6 +60,11 @@ divergence check that promotes a candidate compares digests exactly as git compa
 - Writing a new baseline keeps a small tail of recent baselines and drops the rest. Two
   panes share one worktree's store, so a promotion in one must not delete the other's
   live baseline.
+- A blob drops only when every kept manifest was read and none of them names it. One
+  manifest that fails to read leaves the whole sweep for the next promotion.
+- A blob written in the last minute stays whatever the manifests name. A sibling pane
+  writes its blobs before the manifest that names them, so the sweep cannot yet tell that
+  blob from an abandoned one.
 
 ## Scopes
 
