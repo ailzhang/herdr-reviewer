@@ -58,7 +58,8 @@ divergence check that promotes a candidate compares digests exactly as git compa
   `sl diff` — never one subprocess per file.
 - A turn-start-dirty file past the diff pane's render budget counts `(0, 0)`, as a binary one
   does.
-- The current baseline persists in the store and survives pane restarts.
+- The current baseline persists in the store and survives pane restarts. A baseline the
+  store no longer holds whole reads at open as no baseline, never as an error.
 - Writing a new baseline keeps a small tail of recent baselines and drops the rest. Two
   panes share one worktree's store, so a promotion in one must not delete the other's
   live baseline.

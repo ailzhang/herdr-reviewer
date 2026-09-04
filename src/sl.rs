@@ -873,13 +873,17 @@ impl Store {
         }
     }
 
-    /// The persisted turn baseline id, if its manifest is still readable — a pointer
-    /// whose manifest is gone must read as no baseline, or `last-turn` would fail
-    /// every build until the next turn.
+    /// The persisted turn baseline id, if the store still holds the whole snapshot — a
+    /// pointer whose manifest is gone must read as no baseline, or `last-turn` would fail
+    /// every build until the next turn. A blob is as load-bearing as the manifest naming
+    /// it, and a store swept by an older reviewr can be missing one, so the seed checks
+    /// every blob too. That is one `stat` per turn-start-dirty file, at open only.
     pub fn read_baseline(&self) -> Option<String> {
         let id = std::fs::read_to_string(self.baseline_path()).ok()?;
         let id = id.trim().to_string();
-        self.load_manifest(&id).map(|_| id)
+        let manifest = self.load_manifest(&id)?;
+        let whole = manifest.files.values().flatten().all(|h| self.blobs_dir().join(h).is_file());
+        whole.then_some(id)
     }
 
     fn load_manifest(&self, id: &str) -> Option<Manifest> {
@@ -1457,6 +1461,25 @@ mod tests {
         store.prune(&ids[5]);
         assert_eq!(store.read_blob("aa00"), None, "a pruned manifest's blob goes with it");
         assert_eq!(store.read_blob("aa05"), Some(b"v5".to_vec()));
+    }
+
+    #[test]
+    fn a_baseline_missing_a_blob_seeds_as_no_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().to_path_buf());
+        let manifest = Manifest {
+            parent: "p0".to_string(),
+            files: BTreeMap::from([("f.rs".to_string(), Some("aa11".to_string()))]),
+        };
+        let id = manifest.id();
+        let blobs = HashMap::from([("aa11".to_string(), std::sync::Arc::new(b"old".to_vec()))]);
+        store.persist(&Pending { id: id.clone(), manifest, blobs }).unwrap();
+        assert_eq!(store.read_baseline(), Some(id));
+
+        // An older reviewr's sweep could take a live baseline's blob. Seeding that pointer
+        // anyway costs an error on every `last-turn` build until the next turn promotes.
+        std::fs::remove_file(store.blobs_dir().join("aa11")).unwrap();
+        assert_eq!(store.read_baseline(), None);
     }
 
     #[test]
