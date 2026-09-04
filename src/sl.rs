@@ -391,9 +391,20 @@ impl Pick {
     /// the header (`specs/sapling.md` Scopes).
     fn label(&self) -> String {
         let end = self.tip.clone().unwrap_or_else(|| self.base.clone());
-        let node = end.len() > 7 && end.bytes().all(|b| b.is_ascii_hexdigit());
-        if node { crate::git::abbreviate_oid(&end) } else { end }
+        let node = end.len() > 12 && end.bytes().all(|b| b.is_ascii_hexdigit());
+        if node { abbreviate_node(&end) } else { end }
     }
+}
+
+/// The abbreviated node every Sapling surface paints (`specs/sapling.md` Scopes).
+/// Sapling's own short-node width, so a node the pane shows reads the same as the one
+/// `sl` shows and pastes back into `sl` unchanged. Git's seven is two things here: below
+/// the seven-hex floor a lazy monorepo clone will resolve a prefix at, and ambiguous at
+/// monorepo scale, so the header would name commits the reviewer cannot look up.
+#[must_use]
+pub fn abbreviate_node(oid: &str) -> String {
+    const N: usize = 12;
+    if oid.len() <= N { oid.to_string() } else { oid[..N].to_string() }
 }
 
 /// Resolve one revision spelling to its full node, `Ok(None)` for a spelling Sapling
@@ -1219,8 +1230,8 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
 #[cfg(test)]
 mod tests {
     use super::{
-        Manifest, Pending, Store, cmdline, complete_pick_spelling, diff_counts, probe_revset,
-        text_counts,
+        Manifest, Pending, Store, abbreviate_node, cmdline, complete_pick_spelling, diff_counts,
+        probe_revset, text_counts,
     };
 
     #[test]
@@ -1250,6 +1261,16 @@ mod tests {
             "limit(present(fbcode-nope), 1)",
             "an unknown remote-shaped name must not reach the remote"
         );
+    }
+
+    #[test]
+    fn a_node_paints_at_saplings_own_short_width() {
+        // Twelve, not git's seven. A lazy monorepo clone resolves no prefix shorter than
+        // seven at all, and calls a good share of seven ambiguous, so a node painted git's
+        // way is one the reviewer cannot paste back into `sl`.
+        let node = "76d14ba62b43b42bae519c1080a440d2428784db";
+        assert_eq!(abbreviate_node(node), "76d14ba62b43");
+        assert_eq!(abbreviate_node("76d14ba"), "76d14ba");
     }
 
     #[test]

@@ -91,12 +91,14 @@ branch); only the sources adapt:
 - An empty `public()` answer is a no-base state, never an error.
 - A `branch` range has two ends. It starts at the base and ends at the working copy, unless the
   pick names one commit to review, which ends it at that commit.
-- The header names the far end only when the pick pins it, `vs f01c3d2 → 2eb84b9`. A range that
-  ends at the working copy names the base alone, as a git repository does (`tui.md`).
-- The pinned far end names its code review number, `vs f01c3d2 → D113340447`, and its
+- The header names the far end only when the pick pins it, `vs f01c3d2a4b56 → 2eb84b9c0d1e`.
+  A range that ends at the working copy names the base alone, as a git repository does
+  (`tui.md`).
+- The pinned far end names its code review number, `vs f01c3d2a4b56 → D113340447`, and its
   abbreviated node when it carries none, exactly as its base-picker row does.
-- The pinned far end's description follows the nodes, `vs f01c3d2 → 2eb84b9 · fix the thing`, and a
-  header too narrow for all of it drops the description before the nodes.
+- The pinned far end's description follows the nodes,
+  `vs f01c3d2a4b56 → 2eb84b9c0d1e · fix the thing`, and a header too narrow for all of it
+  drops the description before the nodes.
 - The base picker lists `whole stack` first, then the local bookmarks, then the draft commits
   connected to `.`, newest first. Connected runs both ways, so a `sl prev` down the stack still
   offers the commits above. A typed spelling resolves through `sl log -r`.
@@ -116,7 +118,7 @@ branch); only the sources adapt:
 - A commit pick records both ends, `<node>^..<node>`, so it still names one commit after a
   restart. The pick skips whole when its commit has no live successor, and when that
   successor is a root commit with no parent to diff against.
-- A dormant pick names a node abbreviated, `2eb84b9 missing`, and a bookmark name whole.
+- A dormant pick names a node abbreviated, `2eb84b9c0d1e missing`, and a bookmark name whole.
 - A commit row reads as its description's first line. It is marked with its code review
   number, and with the short hash it records when it carries no number. The filter matches
   the description, the hash, and the number.
@@ -129,6 +131,8 @@ branch); only the sources adapt:
   no row says `no commits match`.
 - A hex-shaped spelling resolves as a hash prefix, never as a local revision number —
   bare in a revset, `123456` names a decade-old commit.
+- Every node the pane names paints at twelve hex, Sapling's short-node width, never git's
+  seven.
 - A typed hash prefix records the whole node it resolved to. A typed name records itself
   and keeps following its bookmark.
 - A spelling whose prefix has gone ambiguous is skipped, exactly as an unknown one.

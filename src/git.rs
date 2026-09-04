@@ -863,19 +863,6 @@ pub fn spelling_is_sha_prefix(spelling: &str, oid: &str) -> bool {
         && oid.to_ascii_lowercase().starts_with(&s)
 }
 
-/// Shown name and optional abbreviated SHA for a non-branch spelling (`specs/tui.md`,
-/// `specs/input.md`). A SHA prefix paints once; anything else keeps the spelling and
-/// carries the mark.
-#[must_use]
-pub fn rev_paint(spelling: &str, oid: &str) -> (String, Option<String>) {
-    let abbrev = abbreviate_oid(oid);
-    if spelling_is_sha_prefix(spelling, oid) {
-        (abbrev, None)
-    } else {
-        (spelling.to_string(), Some(abbrev))
-    }
-}
-
 /// Complete a unique SHA prefix to the abbreviated object id. A spelling that is
 /// already that abbrev, or a longer hex prefix of the oid (a pasted 40-hex), is kept
 /// (`specs/input.md`).

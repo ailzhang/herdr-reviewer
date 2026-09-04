@@ -1382,7 +1382,7 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
             ("vs ".to_string(), name.clone(), branch_tip_mark(app, ""), tail)
         }
         Some(git::ResolvedBase::Rev { spelling, oid }) => {
-            let (shown, mark) = git::rev_paint(spelling, oid);
+            let (shown, mark) = crate::vcs::rev_paint(app.vcs, spelling, oid);
             let mark = mark.map(|m| format!(" ({m})")).unwrap_or_default();
             ("vs ".to_string(), shown, branch_tip_mark(app, &mark), tail)
         }
@@ -1394,11 +1394,12 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
 /// review pins (`specs/sapling.md` Scopes). A range ending at the working copy has no far
 /// end to name. It rides the marker so the header's truncation keeps or drops the whole
 /// range together, never half of it. The far end names its code review number, and falls
-/// back to its abbreviated node, exactly as its base-picker row does.
+/// back to its abbreviated node, exactly as its base-picker row does. Only a Sapling pick
+/// pins a far end, so the node abbreviates Sapling's way.
 fn branch_tip_mark(app: &App, marker: &str) -> String {
     match &app.branch_tip {
         Some(tip) if !tip.diff.is_empty() => format!("{marker} → {}", tip.diff),
-        Some(tip) => format!("{marker} → {}", git::abbreviate_oid(&tip.oid)),
+        Some(tip) => format!("{marker} → {}", crate::sl::abbreviate_node(&tip.oid)),
         None => marker.to_string(),
     }
 }
@@ -2392,13 +2393,14 @@ mod tests {
 
     #[test]
     fn a_stack_row_trails_its_code_review_number_when_it_has_one() {
+        let sl = crate::vcs::VcsKind::Sapling;
         let commit = |diff: &str| crate::app::BaseChoice::Commit {
-            node: "2eb84b9c1d".into(),
+            node: "2eb84b9c1d0f".into(),
             diff: diff.into(),
             title: "fix the thing".into(),
         };
-        assert_eq!(super::base_trail(&commit("D113340447")), "(D113340447)");
-        assert_eq!(super::base_trail(&commit("")), "(2eb84b9)");
+        assert_eq!(super::base_trail(sl, &commit("D113340447")), "(D113340447)");
+        assert_eq!(super::base_trail(sl, &commit("")), "(2eb84b9c1d0f)");
     }
 
     #[test]
@@ -2410,14 +2412,14 @@ mod tests {
                 None,
             );
             app.branch_tip = Some(crate::vcs::Tip {
-                oid: "2eb84b9c1d".into(),
+                oid: "2eb84b9c1d0f".into(),
                 diff: diff.into(),
                 title: "fix the thing".into(),
             });
-            super::branch_tip_mark(&app, " (f01c3d2)")
+            super::branch_tip_mark(&app, " (f01c3d20a1b2)")
         };
-        assert_eq!(mark("D113340447"), " (f01c3d2) → D113340447");
-        assert_eq!(mark(""), " (f01c3d2) → 2eb84b9");
+        assert_eq!(mark("D113340447"), " (f01c3d20a1b2) → D113340447");
+        assert_eq!(mark(""), " (f01c3d20a1b2) → 2eb84b9c1d0f");
     }
 
     /// The production pairing: box rows built at the same width the caret maps against.
@@ -3056,16 +3058,16 @@ pub fn hit_picker_row(area: Rect, app: &App, col: u16, row: u16) -> Option<usize
 
 /// A row's dim trail: `default` on the default branch, or `(sha)` on a named rev
 /// (`specs/input.md` Base picker).
-fn row_shown(row: &crate::app::BaseChoice) -> String {
+fn row_shown(kind: crate::vcs::VcsKind, row: &crate::app::BaseChoice) -> String {
     match row {
-        crate::app::BaseChoice::Rev { name, oid } => git::rev_paint(name, oid).0,
+        crate::app::BaseChoice::Rev { name, oid } => crate::vcs::rev_paint(kind, name, oid).0,
         crate::app::BaseChoice::Branch { name, .. } => name.clone(),
         crate::app::BaseChoice::Stack => row.name().to_string(),
         // A stack row reads as its description, elided so the `(node)` trail it records
         // stays on screen (`specs/sapling.md` Scopes).
         crate::app::BaseChoice::Commit { node, title, .. } => {
             if title.is_empty() {
-                git::abbreviate_oid(node)
+                crate::sl::abbreviate_node(node)
             } else {
                 truncate_width(title, COMMIT_TITLE_MAX)
             }
@@ -3076,12 +3078,13 @@ fn row_shown(row: &crate::app::BaseChoice) -> String {
 /// Columns a stack row's description may take before it is elided.
 const COMMIT_TITLE_MAX: usize = 56;
 
-fn base_trail(row: &crate::app::BaseChoice) -> String {
+fn base_trail(kind: crate::vcs::VcsKind, row: &crate::app::BaseChoice) -> String {
     if row.is_default() {
         return "default".into();
     }
     match row {
-        crate::app::BaseChoice::Rev { name, oid } => match git::rev_paint(name, oid).1 {
+        crate::app::BaseChoice::Rev { name, oid } => match crate::vcs::rev_paint(kind, name, oid).1
+        {
             Some(abbrev) => format!("({abbrev})"),
             None => String::new(),
         },
@@ -3095,7 +3098,7 @@ fn base_trail(row: &crate::app::BaseChoice) -> String {
             } else if title.is_empty() {
                 String::new()
             } else {
-                format!("({})", git::abbreviate_oid(node))
+                format!("({})", crate::sl::abbreviate_node(node))
             }
         }
         crate::app::BaseChoice::Branch { .. } | crate::app::BaseChoice::Stack => String::new(),
@@ -3103,10 +3106,10 @@ fn base_trail(row: &crate::app::BaseChoice) -> String {
 }
 
 /// Content width of one base-picker row: star lead, painted name, and dim trail.
-fn base_row_width(row: &crate::app::BaseChoice) -> usize {
-    let trail = base_trail(row);
+fn base_row_width(kind: crate::vcs::VcsKind, row: &crate::app::BaseChoice) -> usize {
+    let trail = base_trail(kind, row);
     let trail_w = if trail.is_empty() { 0 } else { 2 + trail.width() };
-    3 + row_shown(row).width() + trail_w
+    3 + row_shown(kind, row).width() + trail_w
 }
 
 /// Sized like the agent picker's box, plus the filter line above the rows. The box holds its
@@ -3117,7 +3120,7 @@ fn base_picker_popup(area: Rect, app: &App) -> Rect {
         crate::app::BaseProbe::Hit(c) => Some(c),
         _ => None,
     };
-    let widest = bp.rows.iter().chain(hit).map(base_row_width).max().unwrap_or(0);
+    let widest = bp.rows.iter().chain(hit).map(|r| base_row_width(app.vcs, r)).max().unwrap_or(0);
     menu_popup(area, app, widest, base_picker_title(app), bp.rows.len().max(1) + 3)
 }
 
@@ -3192,8 +3195,8 @@ fn render_base_picker(frame: &mut Frame, app: &App, area: Rect) {
             // trail right-aligns to the row so a probe and the full list put `(sha)`
             // in the same place.
             let lead = if row.starred() { " ★ " } else { "   " };
-            let label = row_shown(row);
-            let trail = base_trail(row);
+            let label = row_shown(app.vcs, row);
+            let trail = base_trail(app.vcs, row);
             let gap = if trail.is_empty() { 0 } else { 2 };
             let pad = width.saturating_sub(lead.width() + label.width() + gap + trail.width());
             let mut spans = vec![

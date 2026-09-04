@@ -4344,7 +4344,12 @@ impl App {
     /// while the reviewer looks at `uncommitted` would name a state nothing on screen shows.
     fn export_preamble(&self) -> Option<String> {
         let tip = self.branch_tip.as_ref().filter(|_| self.scope == Scope::Branch)?;
-        Some(format!("reviewing commit {}, not the working copy", git::abbreviate_oid(&tip.oid)))
+        // Only a Sapling pick pins a far end, so the node abbreviates Sapling's way — the
+        // agent is told a commit id it can paste into `sl` (`specs/sapling.md` Scopes).
+        Some(format!(
+            "reviewing commit {}, not the working copy",
+            crate::sl::abbreviate_node(&tip.oid)
+        ))
     }
 
     /// Send/copy every written comment to `target`; consume the whole set only on

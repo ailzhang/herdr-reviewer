@@ -256,7 +256,7 @@ fn a_dormant_pick_names_its_node_abbreviated() {
     app.reload().unwrap();
 
     let painted = painted(&app);
-    assert!(painted.contains(&format!("{} missing", &gone[..7])), "{painted}");
+    assert!(painted.contains(&format!("{} missing", &gone[..12])), "{painted}");
     assert!(!painted.contains(gone), "the whole node never paints");
 }
 
@@ -351,7 +351,7 @@ fn a_commit_pick_reviews_that_commit_against_its_own_parent() {
         ["second.txt"],
         "one commit's own changes: not the commit above it, not the uncommitted edit"
     );
-    let want = format!("vs {} → {} · second commit", &parent[..7], &node[..7]);
+    let want = format!("vs {} → {} · second commit", &parent[..12], &node[..12]);
     assert!(
         painted(&app).contains(&want),
         "the header names both ends and the commit; wanted {want:?}"
@@ -390,7 +390,7 @@ fn a_commit_pick_follows_the_commit_through_an_amend() {
     let mut paths = app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>();
     paths.sort_unstable();
     assert_eq!(paths, ["extra.txt", "second.txt"], "the amended content is what is under review");
-    let want = format!("vs {} → {}", &parent[..7], &amended[..7]);
+    let want = format!("vs {} → {}", &parent[..12], &amended[..12]);
     assert!(painted(&app).contains(&want), "the header names the new node; wanted {want:?}");
 }
 
@@ -431,7 +431,7 @@ fn a_rebased_pick_diffs_against_the_parent_it_has_now() {
         ["second.txt"],
         "the landed commit is under the base, not inside the review"
     );
-    let want = format!("vs {} → {}", &landed[..7], &rebased[..7]);
+    let want = format!("vs {} → {}", &landed[..12], &rebased[..12]);
     assert!(painted(&app).contains(&want), "the header names the new parent; wanted {want:?}");
 }
 
@@ -451,7 +451,7 @@ fn a_pick_on_the_root_commit_is_skipped_for_want_of_a_parent() {
     assert_eq!(ends.base.winner, None, "the repo has no public commit to fall back to");
     assert_eq!(
         ends.base.skipped.as_deref(),
-        Some(&node[..7]),
+        Some(&node[..12]),
         "the pick reports as skipped, named by its abbreviated node"
     );
 }
@@ -501,7 +501,7 @@ fn a_commit_pick_names_the_commit_in_the_export_preamble() {
     let target = Captured::default();
     assert!(app.export(&target));
     let sent = target.0.borrow().clone();
-    let want = format!("reviewing commit {}, not the working copy", &node[..7]);
+    let want = format!("reviewing commit {}, not the working copy", &node[..12]);
     assert_eq!(
         sent.lines().next().unwrap(),
         want,

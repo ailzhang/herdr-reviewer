@@ -211,6 +211,30 @@ pub fn complete_pick_spelling(kind: VcsKind, spelling: &str, oid: &str) -> Strin
     }
 }
 
+/// The abbreviated commit id the header and the base picker paint: git's seven hex, or
+/// Sapling's twelve (`specs/sapling.md` Scopes).
+#[must_use]
+pub fn abbreviate_oid(kind: VcsKind, oid: &str) -> String {
+    match kind {
+        VcsKind::Git => git::abbreviate_oid(oid),
+        VcsKind::Sapling => sl::abbreviate_node(oid),
+    }
+}
+
+/// Shown name and optional abbreviated commit id for a non-branch spelling
+/// (`specs/tui.md`). A hash prefix paints once; anything else keeps the spelling and
+/// carries the mark. Prefix-shaped is one rule for both kinds, since only the width the
+/// mark paints at differs.
+#[must_use]
+pub fn rev_paint(kind: VcsKind, spelling: &str, oid: &str) -> (String, Option<String>) {
+    let abbrev = abbreviate_oid(kind, oid);
+    if git::spelling_is_sha_prefix(spelling, oid) {
+        (abbrev, None)
+    } else {
+        (spelling.to_string(), Some(abbrev))
+    }
+}
+
 /// Persist the base pick: a private ref, or the snapshot store
 /// (`specs/sapling.md` SL-NO-REPO-WRITES).
 pub fn write_base_pick(kind: VcsKind, root: &Path, name: &str) -> Result<(), GitFail> {
