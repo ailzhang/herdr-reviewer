@@ -18,7 +18,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 - The keys shown are defaults: a bare character, a named key, or a `ctrl+`/`alt+` chord (`config.md`).
 - `tab`, `esc`, and `enter` are structural. They are fixed and never rebind.
 - A key hint in the header or the footer shows its action's first bound key.
-- A named key spells as its name in the config and paints as its screen label: `←`, `→`, `↑`, `↓`, `PageUp`, `PageDown`.
+- A named key spells as its name in the config and paints as its screen label: `←`, `→`, `↑`, `↓`, `PageUp`, `PageDown`, `space`.
 - The comments list acts through the same bindings and closes on `esc` and the `comments` binding.
 - The agent picker acts through the `down` / `up` bindings and closes on `esc`.
 - The base picker filters through a text field with the comment editor's controls, moves through the arrows, and closes on `esc`. Its keys are fixed like every text field's, whatever `down` / `up` are bound to.
@@ -30,6 +30,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 | `next-hunk` / `prev-hunk`                                | jump to the next / previous hunk            | `]` / `[`                                   | —                                              |
 | `next-file` / `prev-file`                                | jump to the next / previous file            | `f` / `F`                                   | —                                              |
 | `collapse` / `expand`                                    | collapse / expand, else scroll sideways     | `←` / `→`                                   | click the directory or `⋯` row                 |
+| `expand-step`                                            | reveal a step of the fold under the cursor  | `space`                                     | —                                              |
 | —                                                        | switch focus between list and diff          | `tab`                                       | click a pane                                   |
 | `page-up` / `page-down`                                  | move a page                                 | `PageUp` / `PageDown`                       | —                                              |
 | `half-up` / `half-down`                                  | move a half page                            | `ctrl+u` / `ctrl+d`                         | —                                              |
@@ -105,7 +106,8 @@ The steps and the skips share the rest:
 `expand` and `collapse` act on the collapsible under the cursor, and scroll the diff sideways from anywhere else. A rebind moves the whole bundle.
 
 - On a directory row in the focused file list, `expand` shows its children and `collapse` hides them.
-- On a fold in the diff, `expand` reveals a step of it and repeats (`diff-view.md`). An open fold never closes again, so `collapse` scrolls there.
+- On a fold in the diff, `expand` reveals the whole run and `expand-step` reveals 20 lines at each end, repeating (`diff-view.md`). An open fold never closes again, so `collapse` scrolls there.
+- `expand-step` acts on a fold and nowhere else. Off a fold it is inert, where `expand` scrolls sideways.
 - Elsewhere, `expand` scrolls the diff right and `collapse` scrolls it left. The scroll is inert while wrap is on.
 
 ### Footer

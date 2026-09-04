@@ -15,6 +15,7 @@ pub enum Action {
     PrevFile,
     Collapse,
     Expand,
+    ExpandStep,
     PageUp,
     PageDown,
     HalfUp,
@@ -60,13 +61,14 @@ pub enum KeyCode {
     Down,
     PageUp,
     PageDown,
+    Space,
 }
 
 impl KeyCode {
     /// Every named key, the one list `by_name` and `names` derive from. The spellings live in
     /// the exhaustive `name`/`label` matches, so a new variant cannot compile unspelled.
-    const NAMED: [KeyCode; 6] =
-        [Self::Left, Self::Right, Self::Up, Self::Down, Self::PageUp, Self::PageDown];
+    const NAMED: [KeyCode; 7] =
+        [Self::Left, Self::Right, Self::Up, Self::Down, Self::PageUp, Self::PageDown, Self::Space];
 
     /// The config spelling: the bare character, or the named key's lowercase name
     /// (`specs/config.md` Keybindings).
@@ -79,6 +81,7 @@ impl KeyCode {
             Self::Down => "down".into(),
             Self::PageUp => "pageup".into(),
             Self::PageDown => "pagedown".into(),
+            Self::Space => "space".into(),
         }
     }
 
@@ -93,6 +96,7 @@ impl KeyCode {
             Self::Down => "↓".into(),
             Self::PageUp => "PageUp".into(),
             Self::PageDown => "PageDown".into(),
+            Self::Space => "space".into(),
         }
     }
 
@@ -158,7 +162,7 @@ impl Key {
 
 /// Every action with its config name and default keys — the single source the default keymap,
 /// the name lookup, and the config error message are built from.
-const ACTIONS: [(Action, &str, &[Key]); 40] = [
+const ACTIONS: [(Action, &str, &[Key]); 41] = [
     (Action::Down, "down", &[Key::plain('j'), Key::named(KeyCode::Down)]),
     (Action::Up, "up", &[Key::plain('k'), Key::named(KeyCode::Up)]),
     (Action::NextHunk, "next-hunk", &[Key::plain(']')]),
@@ -167,6 +171,7 @@ const ACTIONS: [(Action, &str, &[Key]); 40] = [
     (Action::PrevFile, "prev-file", &[Key::plain('F')]),
     (Action::Collapse, "collapse", &[Key::named(KeyCode::Left)]),
     (Action::Expand, "expand", &[Key::named(KeyCode::Right)]),
+    (Action::ExpandStep, "expand-step", &[Key::named(KeyCode::Space)]),
     (Action::PageUp, "page-up", &[Key::named(KeyCode::PageUp)]),
     (Action::PageDown, "page-down", &[Key::named(KeyCode::PageDown)]),
     (Action::HalfUp, "half-up", &[Key::ctrl('u')]),
@@ -335,6 +340,13 @@ mod tests {
         assert_eq!(keymap.hint(Action::TabPr), Key::plain('3'));
         assert_eq!(keymap.action_for(Key::named(KeyCode::Right)), Some(Action::Expand));
         assert_eq!(keymap.action_for(Key::named(KeyCode::Left)), Some(Action::Collapse));
+        // Space spells as a named key, never as the character it also is, so `[keybindings]`
+        // has one way to write it (`specs/config.md` Keybindings).
+        assert_eq!(keymap.action_for(Key::named(KeyCode::Space)), Some(Action::ExpandStep));
+        assert_eq!(keymap.action_for(Key::plain(' ')), None);
+        assert_eq!(KeyCode::by_name("space"), Some(KeyCode::Space));
+        assert_eq!(keymap.hint(Action::ExpandStep).config_str(), "space");
+        assert_eq!(keymap.hint(Action::ExpandStep).label(), "space");
         assert_eq!(keymap.action_for(Key::named(KeyCode::Down)), Some(Action::Down));
         assert_eq!(keymap.action_for(Key::named(KeyCode::Up)), Some(Action::Up));
         assert_eq!(keymap.action_for(Key::named(KeyCode::PageUp)), Some(Action::PageUp));

@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-10
-Last edited: 2026-08-17
+Last edited: 2026-09-04
 ---
 
 # Configuration
@@ -94,7 +94,7 @@ A hostname is recognized by at most one forge. A host key naming another host ke
 
 ## Keybindings
 
-`[keybindings]` rebinds the action shortcuts: the resolved keymap is the default keymap with each bound action's keys replaced by its binding. A key is one printable, non-whitespace codepoint or a named key: `left`, `right`, `up`, `down`, `pageup`, or `pagedown`. Either form stands alone or takes a `ctrl+`/`alt+` prefix. A chord-only action, like `find`, rebinds like any other (`input.md`).
+`[keybindings]` rebinds the action shortcuts: the resolved keymap is the default keymap with each bound action's keys replaced by its binding. A key is one printable, non-whitespace codepoint or a named key: `left`, `right`, `up`, `down`, `pageup`, `pagedown`, or `space`. The space bar spells `space`, never a literal blank, so a binding is never whitespace. Either form stands alone or takes a `ctrl+`/`alt+` prefix. A chord-only action, like `find`, rebinds like any other (`input.md`).
 
 A binding never displaces a fixed key (`input.md`). An unknown action name is an unknown key. A malformed key and a duplicate key are invalid values (→ CFG-WHOLE-FILE). A key appears at most once across the resolved keymap, and a collision error names both actions and the shared key. A default added by an upgrade may collide with an existing custom binding the same way.
 

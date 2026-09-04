@@ -502,6 +502,7 @@ pub enum FooterAction {
     DeleteComment,
     JumpComment,
     ExpandFold,
+    ExpandStep,
     /// Take the armed crossing: the hunk step that armed it leaves the file when pressed again.
     /// The direction names the destination and picks the key (`] next file`, `[ prev file`).
     CrossFile {
@@ -1533,19 +1534,31 @@ impl App {
         self.expanded_folds.get(&anchor).copied().unwrap_or(0)
     }
 
-    /// Reveal `FOLD_STEP` more lines at each end of the fold under the cursor, so one press gives
-    /// context to the change above the run and the change below it both. Repeat to keep growing;
-    /// a step that meets in the middle reveals the rest. Revealing is permanent for the session,
-    /// so there is no collapse-back (specs/diff-view.md Folding).
+    /// `→`, and a click on the marker: reveal the whole run under the cursor, however deep
+    /// (specs/diff-view.md Folding).
+    pub fn expand_fold(&mut self, heights: &[usize], viewport: usize) {
+        self.grow_fold(heights, viewport, usize::MAX);
+    }
+
+    /// `space`: reveal `FOLD_STEP` more lines at each end of the fold under the cursor, so one
+    /// press gives context to the change above the run and the change below it both. Repeat to
+    /// keep growing; a step that would meet in the middle reveals the rest
+    /// (specs/diff-view.md Folding).
+    pub fn expand_fold_step(&mut self, heights: &[usize], viewport: usize) {
+        self.grow_fold(heights, viewport, crate::diff::FOLD_STEP);
+    }
+
+    /// Reveal `more` further lines at each end of the fold under the cursor. Revealing is
+    /// permanent for the session, so there is no collapse-back (specs/diff-view.md Folding).
     ///
     /// The viewport stays visually still, by two rules. While a marker survives, it holds its own
     /// screen row: context grows away from it in both directions and the cursor rides it, so the
-    /// next press expands the same fold. On the step that reveals the rest there is no marker
+    /// next press expands the same fold. When the press reveals the rest there is no marker
     /// left to hold, so where the fold sits decides instead — a fold in the top half of the
     /// viewport expands upward (the lines below it hold their position), one in the bottom half
     /// expands downward (the lines above hold theirs). `heights`/`viewport` are this frame's
     /// pre-expand diff geometry.
-    pub fn expand_fold(&mut self, heights: &[usize], viewport: usize) {
+    fn grow_fold(&mut self, heights: &[usize], viewport: usize, more: usize) {
         let fold_idx = self.diff_cursor;
         let Some(anchor) = self.visible.get(fold_idx).and_then(Row::fold_anchor) else {
             return;
@@ -1557,7 +1570,8 @@ impl App {
         let above: usize = heights.get(self.diff_scroll..fold_idx).map_or(0, |s| s.iter().sum());
         let top_half = above < viewport / 2;
         let before = self.visible.len();
-        *self.expanded_folds.entry(anchor).or_insert(0) += crate::diff::FOLD_STEP;
+        let open = self.expanded_folds.entry(anchor).or_insert(0);
+        *open = open.saturating_add(more);
         self.rebuild_visible();
         match self.visible.iter().position(|r| r.fold_anchor() == Some(anchor)) {
             // Rows landed above the marker as well as below, and only this fold moved, so the
@@ -4198,6 +4212,7 @@ impl App {
             }
         } else if self.on_fold() {
             out.push((A::ExpandFold, Primary));
+            out.push((A::ExpandStep, Do));
         } else if self.select_anchor.is_some() {
             out.push((A::Comment, Primary));
             out.push((A::ClearSelection, Do));

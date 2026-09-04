@@ -661,10 +661,16 @@ fn editing_a_comment_surfaces_its_file_from_a_collapsed_directory() {
     assert!(matches!(app.mode, Mode::Composing { editing: Some(_) }));
 }
 
-/// Expand the fold under the cursor with synthetic geometry (these tests don't render).
+/// Expand the whole fold under the cursor with synthetic geometry (these tests don't render).
 fn expand_fold(app: &mut App) {
     let heights = vec![1usize; app.visible.len()];
     app.expand_fold(&heights, 80);
+}
+
+/// Reveal one `FOLD_STEP` of the fold under the cursor, with the same synthetic geometry.
+fn expand_fold_step(app: &mut App) {
+    let heights = vec![1usize; app.visible.len()];
+    app.expand_fold_step(&heights, 80);
 }
 
 /// Place the diff cursor on the first row with `marker` and write a comment there.
@@ -1003,17 +1009,17 @@ fn a_deep_fold_expands_a_step_at_a_time_around_the_marker() {
     let deep = app.visible[head].hidden();
     assert!(deep > 2 * herdr_reviewr::diff::FOLD_STEP, "the run is deeper than one step");
 
-    // One press reveals a step at each end, so the change below the run and the file head above
-    // it both gain context, and the marker keeps the rest.
+    // One `space` reveals a step at each end, so the change below the run and the file head
+    // above it both gain context, and the marker keeps the rest.
     app.diff_cursor = head;
     app.diff_scroll = head; // the marker sits at the top of the viewport
     let heights = vec![1usize; app.visible.len()];
-    app.expand_fold(&heights, 20);
+    app.expand_fold_step(&heights, 20);
     let marker = app.diff_cursor;
     assert_eq!(marker, head + herdr_reviewr::diff::FOLD_STEP, "the cursor rides the marker");
     assert_eq!(app.visible[marker].hidden(), deep - 2 * herdr_reviewr::diff::FOLD_STEP);
     assert_eq!(app.diff_scroll, marker, "the marker holds its screen row");
-    assert!(app.on_fold(), "`→` expands the same fold again");
+    assert!(app.on_fold(), "`space` expands the same fold again");
 
     // Repeat until the step meets in the middle: the marker goes and the run is all context.
     for _ in 0..deep {
@@ -1021,10 +1027,32 @@ fn a_deep_fold_expands_a_step_at_a_time_around_the_marker() {
             break;
         }
         let heights = vec![1usize; app.visible.len()];
-        app.expand_fold(&heights, 20);
+        app.expand_fold_step(&heights, 20);
     }
     assert!(!app.on_fold(), "the run is fully revealed");
     assert!(!app.visible[..=app.diff_cursor].iter().any(|r| r.hidden() > 0), "no marker is left");
+    assert!(app.diff_cursor < app.visible.len(), "cursor stays in range");
+}
+
+#[test]
+fn one_expand_reveals_a_deep_fold_whole() {
+    let r = deeply_folded_repo();
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    let head = app.visible.iter().position(|row| row.hidden() > 0).unwrap();
+    assert!(app.visible[head].hidden() > 2 * herdr_reviewr::diff::FOLD_STEP, "deeper than a step");
+    let anchor = app.visible[head].fold_anchor().unwrap();
+
+    // `→` is the whole-run reveal, however deep the run: `space` is the key that steps. The file
+    // holds a second fold past the change, which this press must leave alone.
+    app.diff_cursor = head;
+    expand_fold(&mut app);
+    assert!(
+        !app.visible.iter().any(|row| row.fold_anchor() == Some(anchor)),
+        "no marker survives one `→`"
+    );
+    assert!(app.visible.iter().any(|row| row.hidden() > 0), "the other fold is untouched");
+    assert!(!app.on_fold(), "`→` now scrolls instead");
     assert!(app.diff_cursor < app.visible.len(), "cursor stays in range");
 }
 
@@ -1034,8 +1062,8 @@ fn a_partly_revealed_fold_keeps_its_identity_across_a_refresh() {
     let mut app = app_on(&r);
     app.focus = Focus::Diff;
     app.diff_cursor = app.visible.iter().position(|row| row.hidden() > 0).unwrap();
-    expand_fold(&mut app);
-    expand_fold(&mut app);
+    expand_fold_step(&mut app);
+    expand_fold_step(&mut app);
     let hidden = app.visible[app.diff_cursor].hidden();
 
     // A refresh of the same file rebuilds the rows; the depth is keyed on the whole run's first

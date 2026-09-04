@@ -1543,6 +1543,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
     // (`tab`, `esc`), which stay hardcoded per context (`specs/input.md`).
     let alt = key.modifiers.contains(KeyModifiers::ALT);
     let code = match key.code {
+        // Space is a named key in `[keybindings]`, so it never reaches the keymap as the
+        // character it also is: one spelling, `space` (`specs/config.md` Keybindings).
+        Char(' ') => Some(keymap::KeyCode::Space),
         Char(c) => Some(keymap::KeyCode::Char(c)),
         Left => Some(keymap::KeyCode::Left),
         Right => Some(keymap::KeyCode::Right),
@@ -1680,6 +1683,12 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
                 app.expand_fold(&heights, ui::diff_viewport_height(area, app));
             }
             K::Expand => app.scroll_h(8),
+            // `expand-step` acts on a fold and nowhere else, so off one it is inert rather than
+            // scrolling sideways the way `expand` does (`specs/input.md` Expand and collapse).
+            K::ExpandStep if app.on_fold() => {
+                let heights = ui::diff_row_heights(app, area);
+                app.expand_fold_step(&heights, ui::diff_viewport_height(area, app));
+            }
             K::Collapse => app.scroll_h(-8),
             K::PageDown => app.move_cursor(PAGE)?,
             K::PageUp => app.move_cursor(-PAGE)?,
@@ -1716,8 +1725,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::Search => app.open_search(),
             K::Find => app.open_find(),
             K::Keys => app.toggle_keys(),
-            // `edit`/`delete` off the diff, and `open-pr` off the `PR` tab, are inert.
-            K::Edit | K::Delete | K::OpenPr => {}
+            // `edit`/`delete` off the diff, `open-pr` off the `PR` tab, and `expand-step` off a
+            // fold are inert.
+            K::Edit | K::Delete | K::OpenPr | K::ExpandStep => {}
         }
         return Ok(());
     }

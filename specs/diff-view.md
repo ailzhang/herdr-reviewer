@@ -123,13 +123,15 @@ Return to source is different per view.
 
 - An unchanged run that is longer than the context margin becomes one `fold` row. The row shows the count of hidden lines.
 - A leading unchanged region also folds. A trailing unchanged region also folds. The pane opens on the changes.
-- One expand reveals 20 lines at each end of the run, as `context` rows. The change above the run and the change below it each gain context from the one press. The `fold` row stays over the middle, and its count drops by what the press revealed.
-- Expanding again reveals 10 more at each end. A step that meets in the middle reveals the rest of the run, and the `fold` row goes.
+- `expand` reveals the whole run at once, however deep it is. The `fold` row goes with it.
+- `expand-step` reveals 20 lines at each end of the run instead, as `context` rows. The change above the run and the change below it each gain context from the one press. The `fold` row stays over the middle, and its count drops by what the press revealed.
+- Stepping again reveals 20 more at each end. A step that would meet in the middle reveals the rest of the run, and the `fold` row goes.
+- `expand-step` acts on a fold and nowhere else. Off a fold it does nothing, where `expand` scrolls sideways (`input.md`).
 - A search match inside a fold reveals the whole run rather than a step (`find-in-file.md`).
 - You cannot close a fold again by hand.
 - A fold is identified by the first line of the whole run. A partial reveal does not move that line.
 - A reveal stays across refreshes of the same file, at the depth it reached. Opening a different file starts with folds closed. An edit that changes the shape of the run closes it again.
-- When you expand, the viewport stays. A `fold` row that survives the press holds its own screen row, and the cursor rides it. The next press expands the same fold.
+- When you reveal, the viewport stays. A `fold` row that survives the press holds its own screen row, and the cursor rides it. The next press expands the same fold.
 - On the press that reveals the rest, no `fold` row is left to hold. A fold in the top half grows up. A fold in the bottom half grows down.
 
 ### Wrapping and the gutter
