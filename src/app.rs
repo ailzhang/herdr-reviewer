@@ -3727,12 +3727,17 @@ impl App {
         self.changed.get(path)
     }
 
+    /// Whether the search screen is offered here. The engine walks and content-indexes the whole
+    /// worktree, which a Sapling monorepo forbids, so a Sapling pane never offers it
+    /// (`specs/sapling.md` SL-SCALE-CHANGED).
+    #[must_use]
+    pub fn search_available(&self) -> bool {
+        self.vcs != crate::vcs::VcsKind::Sapling
+    }
+
     /// `/`: open the search screen, from any tab, from either pane (specs/search.md).
     pub fn open_search(&mut self) {
-        // The search engine walks and content-indexes the whole worktree, which a
-        // Sapling monorepo forbids (`specs/sapling.md` SL-SCALE-CHANGED).
-        if self.vcs == crate::vcs::VcsKind::Sapling {
-            self.status = "search needs a git repository".to_string();
+        if !self.search_available() {
             return;
         }
         // A navigator-divider drag held from the review view must not become a search-split
@@ -4130,7 +4135,9 @@ impl App {
             if self.pr_snapshot().is_some() {
                 out.push((A::OpenPr, Primary));
             }
-            out.push((A::Search, Go));
+            if self.search_available() {
+                out.push((A::Search, Go));
+            }
             out.push((A::TogglePane, Go));
             out.push((A::NavigatorPosition, Go));
             out.push((A::Tabs, Go));
@@ -4229,7 +4236,11 @@ impl App {
         if self.base_pick_available() && !out.iter().any(|&(a, _)| a == A::BasePick) {
             out.push((A::BasePick, Go));
         }
-        out.push((A::Search, Go));
+        // Search shows only where it works, so a Sapling pane never advertises a `/` that
+        // would refuse (`specs/sapling.md` Disabled surfaces).
+        if self.search_available() {
+            out.push((A::Search, Go));
+        }
         // In-file find shows wherever the read pane has content to search (specs/find-in-file.md).
         if self.find_available() {
             out.push((A::Find, Go));

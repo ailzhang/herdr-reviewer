@@ -1052,16 +1052,23 @@ fn search_never_opens_in_a_sapling_pane_and_never_arms_its_engine() {
     app.reload().unwrap();
 
     // The search engine walks and content-indexes the whole worktree. In a monorepo that is
-    // millions of files through a virtual filesystem, so the pane says no instead
+    // millions of files through a virtual filesystem, so the key is inert
     // (`specs/sapling.md` Disabled surfaces).
+    assert!(!app.search_available());
     app.open_search();
-    assert_eq!(app.status, "search needs a git repository");
     assert_eq!(app.mode, herdr_reviewr::app::Mode::Normal, "the screen never replaces the body");
     assert!(app.search.is_none(), "no overlay state to type into");
+    assert_eq!(app.status, "", "an unoffered key says nothing, like the `All files` key");
 
     // `search_dirty` is the flag the event loop reads to spawn the engine, so this is the
     // assertion that stands between a Sapling pane and that walk.
     assert!(!app.search_dirty, "the engine is never armed");
+
+    // The footer never lists a key that would not work here (`specs/input.md` Footer).
+    assert!(
+        !app.footer_bands().iter().any(|&(a, _)| a == herdr_reviewr::app::FooterAction::Search),
+        "`/ search` is advertised in a pane that refuses it"
+    );
 }
 
 #[test]
