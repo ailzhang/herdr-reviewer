@@ -775,6 +775,37 @@ fn the_stack_lists_the_draft_commits_connected_to_the_working_copy() {
 }
 
 #[test]
+fn the_stack_list_caches_until_something_the_revset_reads_moves() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
+    let root = r.root();
+
+    // The picker's half-second walk is paid once. Until the stack moves, it is a map lookup.
+    let first = vcs::list_stack(VcsKind::Sapling, &root).unwrap();
+    assert!(herdr_reviewr::sl::stack_is_cached(&root), "the walk cached its answer");
+    assert_eq!(vcs::list_stack(VcsKind::Sapling, &root).unwrap(), first, "served from cache");
+
+    // `sl goto` moves `.` without touching the commit graph, and `::.` reads `.`.
+    r.sl(&["goto", "-q", ".^^"]);
+    let parked = r.parent();
+    assert!(!herdr_reviewr::sl::stack_is_cached(&root), "moving `.` drops the cached answer");
+
+    // The case a working-copy key alone would miss: rewriting a descendant of `.` leaves `.`
+    // standing, so only the commit graph says the list is stale.
+    herdr_reviewr::sl::preload_stack(&root);
+    assert!(herdr_reviewr::sl::stack_is_cached(&root), "the preload built it off the frame loop");
+    let third = vcs::list_stack(VcsKind::Sapling, &root).unwrap()[0].node.clone();
+    r.sl(&["metaedit", "-r", &third, "-m", "third rewritten"]);
+    assert_eq!(r.parent(), parked, "the rewrite left the working copy where it was");
+    assert!(!herdr_reviewr::sl::stack_is_cached(&root), "a descendant rewrite drops it too");
+    assert_eq!(
+        vcs::list_stack(VcsKind::Sapling, &root).unwrap()[0].title,
+        "third rewritten",
+        "the picker lists the rewritten commit, never the node it replaced"
+    );
+}
+
+#[test]
 fn the_stack_offers_the_live_successor_of_an_obsolete_working_copy_parent() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");

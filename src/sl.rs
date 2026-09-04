@@ -754,6 +754,15 @@ pub struct StackCommit {
 /// landed is public, so `& draft()` drops the row rather than offering a commit that is no
 /// longer in anyone's stack.
 pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
+    // Taken before the query, never after: a mutation that lands while the query runs then
+    // leaves the answer stored under a print nobody will match, rather than under its own.
+    let print = stack_print(root);
+    if let Some(print) = &print
+        && let Some((seen, stack)) = stack_cache().lock().unwrap().get(root)
+        && seen == print
+    {
+        return Ok(stack.clone());
+    }
     let revset = "sort((successors(draft() & ((::.) + (.::))) & draft()) - obsolete(), -rev)";
     // The review number rides the same template, so the picker still costs one spawn.
     let args = ["log", "-r", revset, "-T", "{node|short}\t{phabdiff}\t{desc|firstline}\n"];
@@ -765,7 +774,7 @@ pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
+    let stack: Vec<StackCommit> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .filter_map(|line| {
             let mut fields = line.splitn(3, '\t');
@@ -781,7 +790,65 @@ pub fn list_stack(root: &Path) -> Result<Vec<StackCommit>, GitFail> {
                 title: title.to_string(),
             })
         })
-        .collect())
+        .collect();
+    if let Some(print) = print {
+        // One entry per repository root, and a pane reviews one. A worktree of the same repo
+        // has its own root, so two panes cannot answer for each other.
+        stack_cache().lock().unwrap().insert(root.to_path_buf(), (print, stack.clone()));
+    }
+    Ok(stack)
+}
+
+/// Run [`list_stack`] into its cache, off the frame loop. The base picker then opens between
+/// two frames instead of waiting half a second on the `draft()` walk (`specs/sapling.md`
+/// Reads). A failure is dropped: the picker runs the same query and reports it there.
+pub fn preload_stack(root: &Path) {
+    let _ = list_stack(root);
+}
+
+/// Whether the cached stack list still answers for `root` as it stands. The preload runs on the
+/// world worker, so this is the only way to see that it landed rather than to time the picker,
+/// which a loaded machine makes a coin flip ([`content_is_cached`] answers the same way).
+pub fn stack_is_cached(root: &Path) -> bool {
+    let Some(print) = stack_print(root) else { return false };
+    stack_cache().lock().unwrap().get(root).is_some_and(|(seen, _)| *seen == print)
+}
+
+/// A fingerprint of everything [`list_stack`]'s revset reads. The working-copy parent covers
+/// `::.` and `.::`, which `sl goto` moves without touching the commit graph. The metalog root
+/// log covers `draft()`, `successors()`, and `obsolete()`: every command that rewrites a
+/// commit appends a root there, including one that rewrites a descendant and leaves `.`
+/// standing.
+///
+/// `None` when the metalog is not where it is looked for, and then nothing caches and the
+/// picker pays the full query. A stale list is a wrong screen, so an unrecognized layout
+/// gives up the cache rather than guessing that the stack has not moved.
+fn stack_print(root: &Path) -> Option<String> {
+    let log = store_dir(root)?.join("metalog").join("roots").join("log");
+    let meta = std::fs::metadata(&log).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{} {} {}", parent_rev(root)?, meta.len(), mtime.as_nanos()))
+}
+
+/// The repository's store directory. `.sl` is the current dot directory and `.hg` the one a
+/// checkout made by an older Sapling still carries. A `sharedpath` file redirects to the dot
+/// directory that holds the store, which is how an `EdenFS` checkout and a worktree share one
+/// commit graph.
+fn store_dir(root: &Path) -> Option<PathBuf> {
+    let dot = [".sl", ".hg"].into_iter().map(|d| root.join(d)).find(|d| d.is_dir())?;
+    let shared = std::fs::read_to_string(dot.join("sharedpath"))
+        .map(|p| PathBuf::from(p.trim()))
+        .unwrap_or(dot);
+    Some(shared.join("store"))
+}
+
+/// A cache from a repository root to the stack list and the fingerprint of the inputs that
+/// produced it.
+type StackCache = Mutex<HashMap<PathBuf, (String, Vec<StackCommit>)>>;
+
+fn stack_cache() -> &'static StackCache {
+    static CACHE: OnceLock<StackCache> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
 }
 
 // --- file content -------------------------------------------------------------------

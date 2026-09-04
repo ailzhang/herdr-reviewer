@@ -479,6 +479,8 @@ pub fn spawn(
                 if let (Some(path), Some(Ok(built))) = (&job.open, &snapshot) {
                     preload_open(&job.input, built, path);
                 }
+                let stack =
+                    job.input.tab.is_file_tab().then(|| (job.input.vcs, job.input.repo.clone()));
                 let completion = WorldCompletion {
                     generation: job.generation,
                     input: job.input,
@@ -488,6 +490,12 @@ pub fn spawn(
                 };
                 if tx.send(completion).is_err() {
                     break;
+                }
+                // After the send, never before: the base picker is a keypress away, but this
+                // poll's file list is on screen now, and the stack walk costs half a second in
+                // a monorepo every time the stack moves.
+                if let Some((vcs, repo)) = stack {
+                    crate::vcs::preload_stack(vcs, &repo);
                 }
             }
         })

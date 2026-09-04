@@ -171,7 +171,12 @@ counts `(0, 0)` either way, so the diff names it and never carries its payload. 
 caches: two commits' changed set cannot change, so a later poll costs only the pick's own
 resolution. The base picker's commit rows are one
 `sl log -r` over the draft commits connected to `.`, never over the repository's whole draft set.
-That read and the bookmark read run together, so opening the picker costs one wait, not two.
+That read and the bookmark read run together, so opening the picker costs one wait, not two. The
+worker builds those rows after it hands each snapshot over, so the picker opens between two
+frames. The built rows are kept until the working-copy parent moves or the commit graph is
+rewritten, which the metalog root log records even when the rewrite leaves `.` standing. A
+checkout whose store is not where those are read gives up the cache and pays the walk, rather
+than treating an unreadable signal as a stack that has not moved.
 
 | status code | changed-file kind                                    |
 | ----------- | ---------------------------------------------------- |

@@ -260,6 +260,15 @@ pub fn list_stack(kind: VcsKind, root: &Path) -> Result<Vec<sl::StackCommit>, Gi
     }
 }
 
+/// Build [`list_stack`]'s answer ahead of the reviewer opening the base picker. Git lists no
+/// stack, so it has nothing to build ([`sl::preload_stack`]).
+pub fn preload_stack(kind: VcsKind, root: &Path) {
+    match kind {
+        VcsKind::Git => (),
+        VcsKind::Sapling => sl::preload_stack(root),
+    }
+}
+
 /// Record a typed pick's SHA spelling: git completes a unique prefix to the abbreviation,
 /// Sapling to the whole node — a 7-hex prefix is routinely ambiguous in a monorepo, and an
 /// ambiguous pick goes dormant (`specs/review-model.md` Base branch). The public-base
