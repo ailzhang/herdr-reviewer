@@ -4190,7 +4190,16 @@ impl App {
             return;
         }
         let default = crate::vcs::default_branch_name(self.vcs, &self.repo).ok().flatten();
-        let names = match crate::vcs::list_branches(self.vcs, &self.repo, default.as_deref()) {
+        // The two lists are independent spawns, and in a monorepo each costs a third of a
+        // second. The picker opens between two frames, so running them together is what the
+        // reviewer feels: one wait instead of two (`specs/sapling.md` Reads). Git's stack
+        // list spawns nothing, so it pays no thread.
+        let (names, stack) = std::thread::scope(|scope| {
+            let stack = scope.spawn(|| crate::vcs::list_stack(self.vcs, &self.repo));
+            let names = crate::vcs::list_branches(self.vcs, &self.repo, default.as_deref());
+            (names, stack.join().expect("the stack list thread panicked"))
+        });
+        let names = match names {
             Ok(names) => names,
             Err(e) => {
                 self.status = e.0;
@@ -4212,7 +4221,7 @@ impl App {
         // A stable sort, so recency still orders the promoted pair and the rest alike.
         rows.sort_by_key(|r| (!r.starred(), !r.is_default()));
         if self.vcs == crate::vcs::VcsKind::Sapling {
-            match crate::vcs::list_stack(self.vcs, &self.repo) {
+            match stack {
                 Ok(stack) => rows.extend(stack.into_iter().map(|c| BaseChoice::Commit {
                     node: c.node,
                     diff: c.diff,

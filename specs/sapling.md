@@ -134,6 +134,7 @@ either way, so the diff names it and never carries its payload. A range pinned a
 caches: two commits' changed set cannot change, so a later poll costs only the pick's own
 resolution. The base picker's commit rows are one
 `sl log -r` over the draft commits connected to `.`, never over the repository's whole draft set.
+That read and the bookmark read run together, so opening the picker costs one wait, not two.
 
 | status code | changed-file kind                                    |
 | ----------- | ---------------------------------------------------- |
