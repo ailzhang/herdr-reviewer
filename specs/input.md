@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-17
-Last edited: 2026-09-03
+Last edited: 2026-09-04
 ---
 
 # Input
@@ -282,6 +282,8 @@ The filter is a text field with the comment editor's controls, above. `↑` and 
 - A click moves the highlight. A click on the highlighted row picks. Every other gesture is inert, and none reaches the view behind.
 - An empty filter shows a dim `filter or type a revision` placeholder.
 - A filter matching no row shows `no branches match` once the query has been checked and is not a commit. Enter does nothing.
+- The typed query's check runs off the frame loop, so typing never waits on it. One check runs
+  at a time, and its answer paints only while the query that asked for it is still typed.
 - Enter with no highlighted row checks the query immediately. A resolving spelling is recorded. A miss stays on `no branches match`.
 - An empty query with no rows shows `type a revision`, and `enter` does nothing.
 - A pick applies immediately: the changeset rebuilds and the header renames (`review-model.md`).

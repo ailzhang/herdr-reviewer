@@ -31,6 +31,8 @@ const MAX_STACK_PCT: u16 = 50;
 /// Pause after the last filter edit before probing an empty list as a rev
 /// (`specs/input.md` Base picker).
 const BASE_PROBE_DELAY: Duration = Duration::from_millis(150);
+/// How often the frame loop looks for an in-flight probe's answer.
+const BASE_PROBE_POLL: Duration = Duration::from_millis(15);
 /// The search screen's results-pane share: half the body by default, dragged within
 /// wide bounds — the geometry's minimum pane sizes clamp the rest (specs/search.md).
 const DEFAULT_SEARCH_PCT: u16 = 50;
@@ -141,12 +143,18 @@ pub struct BasePicker {
     pub probe: BaseProbe,
 }
 
+/// One typed-spelling resolve's answer, tagged with the query that asked for it.
+type ProbeAnswer = (String, Result<Option<git::ResolvedBase>, git::GitFail>);
+
 /// Empty-list commit probe while the base picker is open (`specs/input.md`).
 #[derive(Clone, Debug, Default)]
 pub enum BaseProbe {
     #[default]
     Idle,
     Pending(Instant),
+    /// Resolving this spelling on a worker thread, and the tag its answer must still match
+    /// to paint (`specs/input.md` Base picker).
+    Running(String),
     Hit(BaseChoice),
     Miss,
 }
@@ -678,6 +686,9 @@ pub struct App {
     /// The base picker's rows, filter, and highlight while `Mode::BasePick` is open
     /// (`specs/input.md` Base picker).
     pub base_picker: Option<BasePicker>,
+    /// The in-flight typed-spelling resolve. At most one runs, and its answer carries the
+    /// query that asked for it.
+    base_probe_rx: Option<std::sync::mpsc::Receiver<ProbeAnswer>>,
     pub mode: Mode,
     pub input: String,
     /// The comment editor's caret: a char index into `input` (`0..=chars().count()`).
@@ -853,6 +864,7 @@ impl App {
             picker_over: Mode::Normal,
             last_sent_pane: None,
             base_picker: None,
+            base_probe_rx: None,
             mode: Mode::Normal,
             input: String::new(),
             caret: 0,
@@ -3145,38 +3157,99 @@ impl App {
         bp.cursor = cursor;
     }
 
-    /// Remaining wait until the empty-list probe, if one is pending.
+    /// Remaining wait until the empty-list probe, if one is pending or in flight.
     #[must_use]
     pub fn base_probe_wait(&self) -> Option<Duration> {
-        match self.base_picker.as_ref()?.probe {
+        match &self.base_picker.as_ref()?.probe {
             BaseProbe::Pending(at) => Some(at.saturating_duration_since(Instant::now())),
+            // A resolve holds no waker of its own, so the loop keeps looking for its answer.
+            BaseProbe::Running(_) => Some(BASE_PROBE_POLL),
             _ => None,
         }
     }
 
-    /// Run the empty-list commit probe if its pause has elapsed (`specs/input.md`).
+    /// Land a finished commit probe, and start one whose pause has elapsed
+    /// (`specs/input.md`). Neither step blocks the frame.
     pub fn tick_base_picker_probe(&mut self) {
-        let at = match self.base_picker.as_ref().map(|bp| &bp.probe) {
-            Some(BaseProbe::Pending(at)) => *at,
-            _ => return,
-        };
-        if Instant::now() < at {
+        if self.base_picker.is_none() {
+            self.base_probe_rx = None;
             return;
         }
-        self.run_base_probe();
+        self.land_base_probe();
+        let due = matches!(
+            self.base_picker.as_ref().map(|bp| &bp.probe),
+            Some(BaseProbe::Pending(at)) if Instant::now() >= *at
+        );
+        if due {
+            self.spawn_base_probe();
+        }
     }
 
-    /// Check the query as a commit now. Tests call this instead of sleeping.
+    /// Check the query as a commit now, on the frame loop. Enter takes this path: there is
+    /// nothing to pick until the spelling resolves, so the wait is the answer. Tests call it
+    /// instead of sleeping.
     pub fn run_base_probe(&mut self) {
-        let Some(bp) = &self.base_picker else { return };
+        let Some(query) = self.base_probe_query() else { return };
+        let answer = crate::vcs::resolve_spelling(self.vcs, &self.repo, &query);
+        self.apply_base_probe(answer);
+    }
+
+    /// The spelling a probe would resolve, and `None` when the picker has nothing to ask.
+    /// Answering nothing rests the probe, so a query that grew rows drops its old verdict.
+    fn base_probe_query(&mut self) -> Option<String> {
+        let bp = self.base_picker.as_mut()?;
         if bp.query.is_empty() || !bp.filtered().is_empty() {
+            self.base_picker.as_mut()?.probe = BaseProbe::Idle;
+            return None;
+        }
+        Some(bp.query.clone())
+    }
+
+    /// Start resolving the typed spelling off the frame loop, and mark the picker asking.
+    /// One resolve runs at a time: Sapling pays a third of a second per probe, so a spawn
+    /// per keystroke would leave a monorepo racing several `sl log` processes at once.
+    fn spawn_base_probe(&mut self) {
+        if self.base_probe_rx.is_some() {
+            // Re-arm rather than pile on. The in-flight answer lands first, and this query
+            // asks again right after it.
             if let Some(bp) = self.base_picker.as_mut() {
-                bp.probe = BaseProbe::Idle;
+                bp.probe = BaseProbe::Pending(Instant::now() + BASE_PROBE_DELAY);
             }
             return;
         }
-        let query = bp.query.clone();
-        let hit = crate::vcs::resolve_spelling(self.vcs, &self.repo, &query).map(|resolved| {
+        let Some(query) = self.base_probe_query() else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.base_probe_rx = Some(rx);
+        let (vcs, repo, asked) = (self.vcs, self.repo.clone(), query.clone());
+        std::thread::spawn(move || {
+            let answer = crate::vcs::resolve_spelling(vcs, &repo, &asked);
+            let _ = tx.send((asked, answer));
+        });
+        if let Some(bp) = self.base_picker.as_mut() {
+            bp.probe = BaseProbe::Running(query);
+        }
+    }
+
+    /// Take a finished resolve, if one is waiting.
+    fn land_base_probe(&mut self) {
+        let Some(rx) = self.base_probe_rx.as_ref() else { return };
+        let Ok((query, answer)) = rx.try_recv() else { return };
+        self.base_probe_rx = None;
+        // The answer paints only while the picker is still asking that question. The query
+        // moved on under the user's own typing, or it grew rows, and either way this verdict
+        // is about nothing on screen (`specs/overview.md` Continuity).
+        let asking = matches!(
+            self.base_picker.as_ref().map(|bp| &bp.probe),
+            Some(BaseProbe::Running(q)) if *q == query
+        );
+        if asking {
+            self.apply_base_probe(answer);
+        }
+    }
+
+    /// Paint one resolve's verdict onto the picker.
+    fn apply_base_probe(&mut self, answer: Result<Option<git::ResolvedBase>, git::GitFail>) {
+        let hit = answer.map(|resolved| {
             resolved.map(|c| match c {
                 git::ResolvedBase::Branch { name, .. } => {
                     BaseChoice::Branch { name, starred: false, is_default: false }
@@ -4254,6 +4327,7 @@ impl App {
             None => self.branch_base.winner.as_ref().map(git::ResolvedBase::name) == Some(r.name()),
         };
         let cursor = rows.iter().position(highlight).unwrap_or(0);
+        self.base_probe_rx = None;
         self.base_picker = Some(BasePicker {
             rows,
             cursor,
@@ -4269,6 +4343,7 @@ impl App {
             self.mode = Mode::Normal;
         }
         self.base_picker = None;
+        self.base_probe_rx = None;
     }
 
     /// Move the highlight through the visible view (`specs/input.md`).

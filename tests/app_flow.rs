@@ -5592,6 +5592,36 @@ fn the_base_picker_owns_the_whole_footer_bar_and_survives_a_config_error() {
 }
 
 #[test]
+fn the_typed_spelling_resolves_off_the_frame_loop() {
+    use std::time::{Duration, Instant};
+    let r = based_repo();
+    let parent = r.git(&["rev-parse", "HEAD~1"]).trim().to_string();
+    let mut app = app_on(&r);
+    app.set_scope(Scope::Branch).unwrap();
+    app.open_base_picker();
+    for ch in "HEAD~1".chars() {
+        app.input_push(ch);
+    }
+    // Past the pause the tick starts the resolve and returns. Sapling pays a third of a
+    // second per probe, so a frame that waited for the answer would swallow every keystroke
+    // typed behind it (`specs/input.md` Base picker).
+    std::thread::sleep(Duration::from_millis(200));
+    app.tick_base_picker_probe();
+    assert!(app.base_picker.as_ref().unwrap().visible().is_empty(), "the frame waited");
+    assert!(app.base_probe_wait().is_some(), "the loop keeps waking for the answer");
+    // A later frame lands it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.base_picker.as_ref().unwrap().visible().is_empty() {
+        assert!(Instant::now() < deadline, "the answer never landed");
+        std::thread::sleep(Duration::from_millis(5));
+        app.tick_base_picker_probe();
+    }
+    let bp = app.base_picker.as_ref().unwrap();
+    assert_eq!(bp.visible()[0].name(), "HEAD~1");
+    assert_eq!(bp.visible()[0].oid(), Some(parent.as_str()));
+}
+
+#[test]
 fn typing_head_tilde_stores_the_spelling() {
     let r = based_repo();
     let parent = r.git(&["rev-parse", "HEAD~1"]).trim().to_string();
