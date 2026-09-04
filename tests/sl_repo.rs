@@ -178,6 +178,29 @@ fn a_rename_carries_its_previous_path() {
 }
 
 #[test]
+fn a_copy_reviews_as_an_added_file_because_its_source_stays() {
+    let r = sl_repo_or_skip!();
+    r.write("orig.txt", "one\ntwo\n");
+    r.commit_all("base");
+    r.sl(&["cp", "orig.txt", "copy.txt"]);
+    r.write("copy.txt", "one\ntwo\nthree\n");
+    let files =
+        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None, None).unwrap();
+
+    assert_eq!(files.len(), 1, "orig.txt is untouched, so only the copy lists: {files:?}");
+    let copy = &files[0];
+    assert_eq!(copy.path, "copy.txt");
+    assert_eq!(
+        copy.kind,
+        ChangeKind::Added,
+        "naming a live file as the source would read as a move"
+    );
+    assert_eq!(copy.previous_path, None);
+    // `sl diff` measures the copy against its source, +1. The whole new file is the addition.
+    assert_eq!((copy.additions, copy.deletions), (3, 0));
+}
+
+#[test]
 fn branch_scope_diffs_committed_and_dirty_work_against_a_flag_base() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "a\n");

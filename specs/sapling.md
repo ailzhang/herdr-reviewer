@@ -118,12 +118,15 @@ a revision is `sl cat -r`; exit 1 is absence, read as empty content. Counts for 
 and `branch` parse one `sl diff --git` per build. The base picker's commit rows are one
 `sl log -r` over the draft ancestors of `.`, never over the repository's whole draft set.
 
-| status code   | changed-file kind                          |
-| ------------- | ------------------------------------------ |
-| `M`           | modified                                   |
-| `A`           | added; with a copy source, renamed         |
-| `R`, `!`      | deleted                                    |
-| `?`           | untracked                                  |
+| status code | changed-file kind                                    |
+| ----------- | ---------------------------------------------------- |
+| `M`         | modified                                             |
+| `A`         | renamed when its copy source is also `R`, else added |
+| `R`, `!`    | deleted                                              |
+| `?`         | untracked                                            |
+
+A copy leaves its source in place, so it reviews as a whole new file: its counts are its own line
+count, not the delta from the source that `sl diff` measures.
 
 Agent membership (`herdr-host.md`) resolves an agent's directory through `sl root` in a Sapling
 pane: a resolved root is cached, a non-root answer is re-checked, a spawn failure holds the

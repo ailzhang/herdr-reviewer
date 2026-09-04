@@ -91,15 +91,42 @@ fn status_entries(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<V
     serde_json::from_str(&out).context("parsing sl status -Tjson")
 }
 
-/// Map one status record to a changed-file kind (`specs/sapling.md` Reads).
-fn kind_of(entry: &StatusEntry) -> Option<ChangeKind> {
+/// Map one status record to a changed-file kind (`specs/sapling.md` Reads). `renamed` is
+/// [`rename_sources`]'s verdict on this record's copy source.
+fn kind_of(entry: &StatusEntry, renamed: bool) -> Option<ChangeKind> {
     match entry.status.as_str() {
         "M" => Some(ChangeKind::Modified),
-        "A" if entry.copy.is_some() => Some(ChangeKind::Renamed),
+        "A" if renamed => Some(ChangeKind::Renamed),
         "A" => Some(ChangeKind::Added),
         "R" | "!" => Some(ChangeKind::Deleted),
         "?" => Some(ChangeKind::Untracked),
         _ => None,
+    }
+}
+
+/// The copy sources a rename consumed. `sl mv` reports `A dest` carrying the source plus
+/// `R source`; `sl cp` reports the `A dest` alone and leaves the source in place, so a copy
+/// reviews as an added file (`specs/sapling.md` Reads).
+fn rename_sources<'a>(entries: &[&'a StatusEntry]) -> std::collections::HashSet<&'a str> {
+    let removed: std::collections::HashSet<&str> =
+        entries.iter().filter(|e| e.status == "R").map(|e| e.path.as_str()).collect();
+    entries
+        .iter()
+        .filter(|e| e.status == "A")
+        .filter_map(|e| e.copy.as_deref())
+        .filter(|source| removed.contains(source))
+        .collect()
+}
+
+/// The new side's line count, for a file whose whole content reads as an addition. The far
+/// end of a pinned range has no worktree file to read, so it reads at that revision.
+fn new_side_lines(root: &Path, to: Option<&str>, path: &str) -> u32 {
+    match to {
+        Some(rev) => cat_cached(root, rev, path)
+            .ok()
+            .flatten()
+            .map_or(0, |b| crate::vcs::text_line_count(&b)),
+        None => crate::vcs::line_additions(root, path),
     }
 }
 
@@ -142,18 +169,21 @@ fn changed_set(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<
     let counts = diff_counts(&sl(root, &diff_args)?);
     // A move reports twice: `A dest` carrying the copy source, plus `R source`. The
     // source row folds into the rename, matching git's single `R old new` record.
-    let moved_sources: std::collections::HashSet<&str> =
-        entries.iter().filter(|e| e.status == "A").filter_map(|e| e.copy.as_deref()).collect();
+    let refs: Vec<&StatusEntry> = entries.iter().collect();
+    let renamed = rename_sources(&refs);
     let mut files: Vec<ChangedFile> = Vec::new();
     for entry in &entries {
-        let Some(kind) = kind_of(entry) else { continue };
-        if kind == ChangeKind::Deleted && moved_sources.contains(entry.path.as_str()) {
+        let source = entry.copy.as_deref().filter(|s| renamed.contains(s));
+        let Some(kind) = kind_of(entry, source.is_some()) else { continue };
+        if kind == ChangeKind::Deleted && renamed.contains(entry.path.as_str()) {
             continue;
         }
         let (additions, deletions) = match kind {
-            // Untracked files never appear in `sl diff`; count locally like git's
-            // untracked pass.
-            ChangeKind::Untracked => (crate::vcs::line_additions(root, &entry.path), 0),
+            // Neither side reaches `sl diff` as an addition against nothing: an untracked
+            // file is absent from it, and a copy diffs against the file it came from. Both
+            // review as whole new files, so both count their new side.
+            ChangeKind::Untracked => (new_side_lines(root, to, &entry.path), 0),
+            ChangeKind::Added if entry.copy.is_some() => (new_side_lines(root, to, &entry.path), 0),
             // A plain-`rm` deletion (`!`) never reaches `sl diff` either; count its
             // old side at the scope's base, one cached read per deleted file.
             ChangeKind::Deleted if !counts.contains_key(&entry.path) => {
@@ -171,7 +201,7 @@ fn changed_set(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<
             kind,
             additions,
             deletions,
-            previous_path: entry.copy.clone(),
+            previous_path: source.map(str::to_string),
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -859,7 +889,9 @@ impl TurnStore {
         let mut files: BTreeMap<String, Option<String>> = BTreeMap::new();
         let mut blobs: HashMap<String, std::sync::Arc<Vec<u8>>> = HashMap::new();
         for entry in entries {
-            if kind_of(&entry).is_none() {
+            // A rename and a copy both snapshot as their own path, so the kind is read
+            // only to drop a status the review does not track.
+            if kind_of(&entry, false).is_none() {
                 continue;
             }
             // A file the status listed but the read misses just went away — record it
@@ -988,19 +1020,19 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
         now.iter().filter(|e| !manifest.files.contains_key(&e.path)).collect();
     if !fresh.is_empty() {
         let counts = diff_counts(&sl(root, &["diff", "--git", "-r", &manifest.parent])?);
-        let moved_sources: std::collections::HashSet<&str> =
-            fresh.iter().filter(|e| e.status == "A").filter_map(|e| e.copy.as_deref()).collect();
+        let renamed = rename_sources(&fresh);
         for entry in fresh {
-            let Some(kind) = kind_of(entry) else { continue };
-            if kind == ChangeKind::Deleted && moved_sources.contains(entry.path.as_str()) {
+            let source = entry.copy.as_deref().filter(|s| renamed.contains(s));
+            let Some(kind) = kind_of(entry, source.is_some()) else { continue };
+            if kind == ChangeKind::Deleted && renamed.contains(entry.path.as_str()) {
                 continue;
             }
             // The baseline has no untracked concept: a file created during the turn is
             // an addition, matching git's tree diff.
             let kind = if kind == ChangeKind::Untracked { ChangeKind::Added } else { kind };
             let (additions, deletions) = match kind {
-                ChangeKind::Added if entry.status == "?" => {
-                    (crate::vcs::line_additions(root, &entry.path), 0)
+                ChangeKind::Added if entry.status == "?" || entry.copy.is_some() => {
+                    (new_side_lines(root, None, &entry.path), 0)
                 }
                 // A plain-`rm` deletion (`!`) never reaches `sl diff`; count its old
                 // side, one cached read per deleted file.
@@ -1015,7 +1047,7 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
                 kind,
                 additions,
                 deletions,
-                previous_path: entry.copy.clone(),
+                previous_path: source.map(str::to_string),
             });
         }
     }
