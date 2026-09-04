@@ -468,7 +468,7 @@ const FOLD_MARGIN: usize = 3;
 
 /// Lines one expand reveals at each end of a fold, so one keypress lands context against both
 /// neighbouring changes and the marker shrinks in the middle (specs/diff-view.md Folding).
-pub const FOLD_STEP: usize = 10;
+pub const FOLD_STEP: usize = 20;
 
 /// How a fold lands in the visible list at reveal depth `open`: the lines shown above the
 /// marker, the lines the marker still hides, and the lines shown below it. `hidden` empty means

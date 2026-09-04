@@ -196,11 +196,11 @@ sample.
 
 Each of these would enumerate or index the worktree, which `SL-SCALE-CHANGED` forbids.
 
-| surface     | in a Sapling pane                                         |
-| ----------- | --------------------------------------------------------- |
-| `All files` | not offered; the tab never paints and its key is inert    |
-| `PR` tab    | not offered; no probe or fetch ever spawns                |
-| search      | not offered; the key is inert and stays out of the footer |
+| surface     | in a Sapling pane                                                   |
+| ----------- | ------------------------------------------------------------------- |
+| `All files` | not offered; the tab never paints and its key is inert              |
+| `PR` tab    | not offered; no probe or fetch ever spawns                          |
+| search      | not offered; `/` opens the in-file find instead (`find-in-file.md`) |
 
 `Changes` is then the only tab, with nothing to switch to, so it reads as a heading without its
 key and the footer drops the tab keys (`input.md`).

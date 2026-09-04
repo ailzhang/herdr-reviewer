@@ -3735,9 +3735,13 @@ impl App {
         self.vcs != crate::vcs::VcsKind::Sapling
     }
 
-    /// `/`: open the search screen, from any tab, from either pane (specs/search.md).
+    /// `/`: open the search screen, from any tab, from either pane (specs/search.md). Where the
+    /// screen is not offered, the key falls through to the in-file find rather than doing nothing:
+    /// `/` is the search reflex, and the find band is the search a Sapling pane has
+    /// (`specs/sapling.md` Disabled surfaces).
     pub fn open_search(&mut self) {
         if !self.search_available() {
+            self.open_find();
             return;
         }
         // A navigator-divider drag held from the review view must not become a search-split

@@ -1043,7 +1043,7 @@ fn a_sapling_pane_offers_the_changes_tab_alone() {
 }
 
 #[test]
-fn search_never_opens_in_a_sapling_pane_and_never_arms_its_engine() {
+fn the_search_key_opens_the_in_file_find_in_a_sapling_pane() {
     let r = sl_repo_or_skip!();
     stacked_repo(&r);
     let root = r.root();
@@ -1052,23 +1052,27 @@ fn search_never_opens_in_a_sapling_pane_and_never_arms_its_engine() {
     app.reload().unwrap();
 
     // The search engine walks and content-indexes the whole worktree. In a monorepo that is
-    // millions of files through a virtual filesystem, so the key is inert
-    // (`specs/sapling.md` Disabled surfaces).
+    // millions of files through a virtual filesystem, so `/` lands on the search this pane
+    // does have (`specs/sapling.md` Disabled surfaces).
     assert!(!app.search_available());
     app.open_search();
-    assert_eq!(app.mode, herdr_reviewr::app::Mode::Normal, "the screen never replaces the body");
+    assert_eq!(app.mode, herdr_reviewr::app::Mode::Find, "`/` reaches the find band");
     assert!(app.search.is_none(), "no overlay state to type into");
-    assert_eq!(app.status, "", "an unoffered key says nothing, like the `All files` key");
 
     // `search_dirty` is the flag the event loop reads to spawn the engine, so this is the
     // assertion that stands between a Sapling pane and that walk.
     assert!(!app.search_dirty, "the engine is never armed");
 
-    // The footer never lists a key that would not work here (`specs/input.md` Footer).
+    // The footer names the action's own key, so `/ search` never appears in a pane that has
+    // no search screen (`specs/input.md` Footer).
+    app.close_find();
+    let bands = app.footer_bands();
+    let names = |want: herdr_reviewr::app::FooterAction| bands.iter().any(|&(a, _)| a == want);
     assert!(
-        !app.footer_bands().iter().any(|&(a, _)| a == herdr_reviewr::app::FooterAction::Search),
-        "`/ search` is advertised in a pane that refuses it"
+        !names(herdr_reviewr::app::FooterAction::Search),
+        "`/ search` is advertised with no screen"
     );
+    assert!(names(herdr_reviewr::app::FooterAction::Find), "the find key is offered");
 }
 
 #[test]
