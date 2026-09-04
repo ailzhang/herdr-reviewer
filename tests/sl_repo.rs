@@ -143,6 +143,36 @@ fn uncommitted_scope_lists_kinds_and_counts() {
 }
 
 #[test]
+fn an_unmoved_worktree_reuses_its_counts_instead_of_spawning_sl_diff() {
+    // `sl diff` costs a quarter second of command dispatch in a monorepo and runs every
+    // poll, so a build whose status listing and whose files' stats are unchanged reuses the
+    // last answer (`specs/sapling.md` Reads). Proven by the wager the gate makes: a rewrite
+    // that keeps the length and the modification time reads as unchanged.
+    let r = sl_repo_or_skip!();
+    r.write("a.txt", "one\n");
+    r.commit_all("base");
+    r.write("a.txt", "one\ntwo\nthree\n");
+    let counts = |r: &SlRepo| {
+        let files = vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None, None)
+            .unwrap();
+        let f = files.iter().find(|f| f.path == "a.txt").expect("a.txt");
+        (f.additions, f.deletions)
+    };
+    assert_eq!(counts(&r), (2, 0));
+
+    let path = r.path().join("a.txt");
+    let pinned = std::fs::metadata(&path).unwrap().modified().unwrap();
+    // Same length, different content, and the modification time put back.
+    std::fs::write(&path, "a\nb\nc\nd\ne\nf\ng\n").unwrap();
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(pinned).unwrap();
+    assert_eq!(counts(&r), (2, 0), "an unmoved stat serves the cached counts");
+
+    let moved = pinned + std::time::Duration::from_secs(1);
+    std::fs::File::options().write(true).open(&path).unwrap().set_modified(moved).unwrap();
+    assert_eq!(counts(&r), (7, 1), "a moved stat spawns the diff again");
+}
+
+#[test]
 fn a_digit_only_spelling_never_resolves_as_a_local_revision_number() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "a\n");

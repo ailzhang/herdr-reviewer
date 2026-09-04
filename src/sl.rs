@@ -219,11 +219,7 @@ fn build_changed_set(
     if entries.is_empty() {
         return Ok(Vec::new());
     }
-    let mut diff_args = vec!["diff", "--git", "--no-binary"];
-    for rev in [from, to].into_iter().flatten() {
-        diff_args.extend(["-r", rev]);
-    }
-    let counts = diff_counts(&sl(root, &diff_args)?);
+    let counts = counts_for(root, from, to, &entries)?;
     // A move reports twice: `A dest` carrying the copy source, plus `R source`. The
     // source row folds into the rename, matching git's single `R old new` record.
     let refs: Vec<&StatusEntry> = entries.iter().collect();
@@ -264,6 +260,81 @@ fn build_changed_set(
     files.sort_by(|a, b| a.path.cmp(&b.path));
     files.dedup_by(|a, b| a.path == b.path);
     Ok(files)
+}
+
+/// Per-file counts for one range. `sl diff` is a quarter second of command dispatch in a
+/// monorepo, where `sl status` is fifty milliseconds, so a range whose inputs are all
+/// unchanged reuses the answer instead of spawning it again (`specs/sapling.md` Reads).
+fn counts_for(
+    root: &Path,
+    from: Option<&str>,
+    to: Option<&str>,
+    entries: &[StatusEntry],
+) -> Result<HashMap<String, (u32, u32)>> {
+    // A range pinned at both ends is already served whole by [`range_cache`], so only a
+    // range that ends at the working copy consults this one.
+    let key = to.is_none().then(|| (root.to_path_buf(), from.unwrap_or_default().to_string()));
+    let print = worktree_print(root, entries);
+    if let Some(key) = &key
+        && let Some((seen, counts)) = counts_cache().lock().unwrap().get(key)
+        && *seen == print
+    {
+        return Ok(counts.clone());
+    }
+    let mut args = vec!["diff", "--git", "--no-binary"];
+    for rev in [from, to].into_iter().flatten() {
+        args.extend(["-r", rev]);
+    }
+    let counts = diff_counts(&sl(root, &args)?);
+    if let Some(key) = key {
+        let mut cache = counts_cache().lock().unwrap();
+        // One entry per scope base is the whole working set. A wholesale clear only costs
+        // the next build its spawn.
+        if cache.len() >= 8 {
+            cache.clear();
+        }
+        cache.insert(key, (print, counts.clone()));
+    }
+    Ok(counts)
+}
+
+/// A cache from a range's near end to the counts it produced, and the fingerprint of the
+/// inputs that produced them.
+type CountsCache = Mutex<HashMap<(PathBuf, String), (String, HashMap<String, (u32, u32)>)>>;
+
+fn counts_cache() -> &'static CountsCache {
+    static CACHE: OnceLock<CountsCache> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
+
+/// A digest of everything `sl diff` reads for one status listing: each entry's path,
+/// status, and copy source, then its worktree file's length and modification time.
+///
+/// Length and modification time rather than content: the counts are recomputed on every
+/// poll, and hashing the content would re-read every changed byte each time, which is the
+/// cost the stat gate on the turn snapshot exists to avoid. A rewrite that leaves both the
+/// length and the modification time alone therefore shows stale counts until the next real
+/// edit, the wager git's index makes on the same reading.
+fn worktree_print(root: &Path, entries: &[StatusEntry]) -> String {
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        for field in [entry.path.as_str(), &entry.status, entry.copy.as_deref().unwrap_or("")] {
+            hasher.update(field.as_bytes());
+            hasher.update([0]);
+        }
+        // An entry with no worktree file (a deletion) contributes its fields alone. Its
+        // old side is pinned by the range's near end, which keys the cache.
+        if let Ok(meta) = std::fs::metadata(root.join(&entry.path)) {
+            hasher.update(meta.len().to_le_bytes());
+            if let Ok(age) = meta.modified().and_then(|m| {
+                m.duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other)
+            }) {
+                hasher.update(age.as_nanos().to_le_bytes());
+            }
+        }
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// The path a `---`/`+++` header names: everything up to the first tab. `sl diff --git`
@@ -1268,8 +1339,9 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
         .filter(|e| !manifest.files.contains_key(&e.path) && !claimed.contains(e.path.as_str()))
         .collect();
     if !fresh.is_empty() {
-        let counts =
-            diff_counts(&sl(root, &["diff", "--git", "--no-binary", "-r", &manifest.parent])?);
+        // The whole status, not the fresh subset: the spawn this stands in for diffs the
+        // whole range, so the fingerprint must cover everything that spawn would read.
+        let counts = counts_for(root, Some(&manifest.parent), None, &now)?;
         for entry in fresh {
             let source = entry.copy.as_deref().filter(|s| moved_to.contains_key(s));
             let Some(kind) = kind_of(entry, source.is_some()) else { continue };
