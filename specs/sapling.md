@@ -153,8 +153,9 @@ copy-source lines, `--copies` so a rename diffs real content. The parent pin is 
 first line, because it answers in milliseconds where `sl log` pays command dispatch. Content at
 a revision is `sl cat -r`; exit 1 is absence, read as empty content. A commit's content never
 changes, so a read caches, and the files within three rows of the cursor read ahead on a worker
-thread. The file cursor opens a diff on every move, and one uncached old side is a third of a
-second. Counts for `uncommitted`
+thread. The file cursor opens a diff on every move, and one uncached side is a third of a
+second. A range that ends at a pinned commit reads ahead on both sides, and one that ends at the
+working copy reads ahead on the old side alone. Counts for `uncommitted`
 and `branch` parse one `sl diff --git --no-binary` per build. That spawn is skipped when the
 status listing and every listed file's length and modification time are unchanged since the
 last build of the same range. A rewrite that moves neither shows the previous counts until

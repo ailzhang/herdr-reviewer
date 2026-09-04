@@ -830,13 +830,14 @@ fn cat_lossy(root: &Path, rev: &str, path: &str) -> String {
 type WarmRequest = (std::path::PathBuf, String, String);
 
 /// The warm queue's sender. One worker thread serves every pane in the process, and the
-/// queue is short on purpose: a reviewer who outran the reads has moved past the far end
-/// of the window, so a dropped request was for a file they are no longer about to open.
+/// queue holds one window whole, both sides of every row in it. It is short past that on
+/// purpose: a reviewer who outran the reads has moved past the far end of the window, so a
+/// dropped request was for a file they are no longer about to open.
 fn warm_queue() -> &'static std::sync::mpsc::SyncSender<WarmRequest> {
     static QUEUE: std::sync::OnceLock<std::sync::mpsc::SyncSender<WarmRequest>> =
         std::sync::OnceLock::new();
     QUEUE.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<WarmRequest>(8);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<WarmRequest>(16);
         std::thread::spawn(move || {
             while let Ok((root, rev, path)) = rx.recv() {
                 let _ = file_content(&root, &rev, &path);
@@ -846,9 +847,9 @@ fn warm_queue() -> &'static std::sync::mpsc::SyncSender<WarmRequest> {
     })
 }
 
-/// Read one file's old side into the content cache, off the frame loop. The reviewer's
-/// next arrow key then costs a map lookup rather than a `sl cat` (`specs/sapling.md`
-/// Reads).
+/// Read one file's content at a revision into the content cache, off the frame loop. The
+/// reviewer's next arrow key then costs a map lookup rather than a `sl cat`
+/// (`specs/sapling.md` Reads).
 pub fn warm_content(root: &Path, rev: &str, path: &str) {
     let _ = warm_queue().try_send((root.to_path_buf(), rev.to_string(), path.to_string()));
 }

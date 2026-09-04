@@ -229,6 +229,41 @@ fn a_neighbours_old_side_reads_ahead_of_the_reviewer() {
 }
 
 #[test]
+fn a_pinned_far_end_reads_both_of_a_neighbours_sides_ahead() {
+    let r = sl_repo_or_skip!();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        r.write(name, "base\n");
+    }
+    r.commit_all("base");
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        r.write(name, "edited\n");
+    }
+    r.commit_all("under review");
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.parent();
+    let parent = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+    assert_eq!(app.entries.len(), 3, "the picked commit's three files");
+
+    // A pinned far end reads the new side with `sl cat` too, so warming the old side alone
+    // leaves a third of a second on the frame loop at every arrow key
+    // (`specs/sapling.md` Reads).
+    assert_eq!(
+        app.warm_targets(),
+        vec![
+            (parent.clone(), "b.txt".to_string()),
+            (node.clone(), "b.txt".to_string()),
+            (parent.clone(), "c.txt".to_string()),
+            (node.clone(), "c.txt".to_string()),
+        ],
+        "both sides of each neighbour, nearest row first"
+    );
+}
+
+#[test]
 fn a_failed_ancestor_query_fails_the_branch_build() {
     let r = sl_repo_or_skip!();
     r.write("a.txt", "one\n");

@@ -1508,13 +1508,9 @@ impl App {
             .old_side_rev()
             .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
             .unwrap_or_default();
-        // A pinned far end diffs commit to commit, so the new side reads from that commit
-        // rather than from the worktree (`specs/sapling.md` Scopes).
-        let new = match (&self.branch_tip, self.scope) {
-            (Some(tip), Scope::Branch) => {
-                crate::vcs::file_content(self.vcs, &self.repo, &tip.oid, new_path)
-            }
-            _ => worktree_content(&self.repo, new_path),
+        let new = match self.new_side_rev() {
+            Some(rev) => crate::vcs::file_content(self.vcs, &self.repo, rev, new_path),
+            None => worktree_content(&self.repo, new_path),
         };
         (old, new)
     }
@@ -1538,17 +1534,38 @@ impl App {
         }
     }
 
-    /// Read the neighbouring files' old sides into the backend's cache, off the frame loop.
-    /// The file cursor opens a diff on every move, and in a Sapling monorepo one old side is
-    /// a third of a second of `sl cat`, so without this every arrow key down the list freezes
+    /// The revision the open file's new side reads at, and `None` when it reads the worktree.
+    /// A pinned far end diffs commit to commit, so the new side reads from that commit rather
+    /// than from the worktree (`specs/sapling.md` Scopes). Shared with the neighbour warm on
+    /// the same terms as [`Self::old_side_rev`].
+    fn new_side_rev(&self) -> Option<&str> {
+        match (&self.branch_tip, self.scope) {
+            (Some(tip), Scope::Branch) => Some(tip.oid.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Read the neighbouring files into the backend's cache, off the frame loop. The file
+    /// cursor opens a diff on every move, and in a Sapling monorepo one uncached side is a
+    /// third of a second of `sl cat`, so without this every arrow key down the list freezes
     /// the pane (`specs/sapling.md` Reads).
     fn warm_neighbours(&self) {
+        for (rev, path) in self.warm_targets() {
+            crate::vcs::warm_content(self.vcs, &self.repo, &rev, &path);
+        }
+    }
+
+    /// The reads the neighbour warm queues, nearest row first: for each row within the window,
+    /// every side the diff build would spawn a command for. A pinned far end reads both sides
+    /// from a commit, so warming the old side alone leaves half of each move on the frame loop.
+    /// The worktree side is a file read, so it is not queued.
+    pub fn warm_targets(&self) -> Vec<(String, String)> {
         /// How far either way from the cursor to read ahead.
         const WINDOW: usize = 3;
         if self.tab != Tab::Changes {
-            return;
+            return Vec::new();
         }
-        let Some(rev) = self.old_side_rev() else { return };
+        let (old, new) = (self.old_side_rev(), self.new_side_rev());
         // Nearest first, so a queue the reviewer outran drops the far end of the window
         // rather than the row they are about to land on.
         let mut near: Vec<(usize, usize)> = self
@@ -1559,11 +1576,20 @@ impl App {
             .filter(|(gap, _)| (1..=WINDOW).contains(gap))
             .collect();
         near.sort_unstable();
+        let mut reads = Vec::new();
         for (_, index) in near {
             let Some(entry) = self.entries.get(index) else { continue };
-            let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-            crate::vcs::warm_content(self.vcs, &self.repo, &rev, path);
+            // Both sides of one row before the next row's, so a reviewer who outran the
+            // queue loses whole rows rather than one side of every row.
+            if let Some(rev) = &old {
+                let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
+                reads.push((rev.clone(), path.to_string()));
+            }
+            if let Some(rev) = new {
+                reads.push((rev.to_string(), entry.path.clone()));
+            }
         }
+        reads
     }
 
     /// Whether the `last-turn` scope is active but no baseline has been captured yet — the
