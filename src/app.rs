@@ -857,12 +857,7 @@ impl App {
             status: String::new(),
             keys_expanded: false,
             should_quit: false,
-            // A Sapling pane opens on the static no-forge state instead of a pending
-            // fetch that will never run (`specs/sapling.md` Disabled surfaces).
-            pr: match vcs {
-                crate::vcs::VcsKind::Git => forge::PrView::Pending,
-                crate::vcs::VcsKind::Sapling => forge::PrView::NotGit,
-            },
+            pr: forge::PrView::Pending,
             pr_forge: crate::git::Forge::GitHub,
             pr_notice: None,
             pr_refreshing: false,
@@ -2122,7 +2117,7 @@ impl App {
 
     /// Queue a PR refresh, merging into any request already pending: the stronger kind
     /// wins, so an ambient trigger can never downgrade the user's commanded refresh.
-    /// A Sapling pane's PR state is static, so no request ever queues
+    /// A Sapling pane offers no `PR` tab, so no request ever queues
     /// (`specs/sapling.md` Disabled surfaces).
     pub fn request_pr_refresh(&mut self, kind: RefreshKind) {
         if self.vcs == crate::vcs::VcsKind::Sapling {
@@ -2131,15 +2126,24 @@ impl App {
         self.pr_pending = self.pr_pending.max(Some(kind));
     }
 
+    /// The tabs this pane offers, left to right. A Sapling pane offers `Changes` alone
+    /// (`specs/sapling.md` Disabled surfaces).
+    pub fn tabs(&self) -> &'static [Tab] {
+        match self.vcs {
+            crate::vcs::VcsKind::Git => &[Tab::Changes, Tab::AllFiles, Tab::Pr],
+            crate::vcs::VcsKind::Sapling => &[Tab::Changes],
+        }
+    }
+
     /// Switch to `tab`, saving the active tab's navigator and read-pane state and restoring the
     /// target's. Each tab keeps its own opened file and scroll, so returning to a tab lands
     /// exactly where you left it (specs/tui.md). The switch frame paints the restored state as
     /// it was; a world refresh lands behind it — stale until it lands, never wrong
-    /// (specs/overview.md Continuity). A no-op on the active tab or while composing; focus
-    /// stays on the same side.
+    /// (specs/overview.md Continuity). A no-op on the active tab, on a tab this pane does not
+    /// offer, or while composing; focus stays on the same side.
     pub fn set_tab(&mut self, tab: Tab) -> Result<()> {
         self.ensure_config_ready()?;
-        if self.tab == tab || self.composing() {
+        if self.tab == tab || self.composing() || !self.tabs().contains(&tab) {
             return Ok(());
         }
         self.tab = tab;
@@ -4048,7 +4052,11 @@ impl App {
         if !out.iter().any(|&(a, _)| a == A::Refresh) {
             out.push((A::Refresh, Go));
         }
-        out.push((A::Tabs, Go));
+        // A pane with one tab has nowhere to switch to, so its digits stay out of the footer,
+        // as the active scope's own key does (`specs/input.md`).
+        if self.tabs().len() > 1 {
+            out.push((A::Tabs, Go));
+        }
         // `tab` un-hides while hidden, so it stays offered even with an empty changeset
         // (specs/input.md).
         if !out.iter().any(|&(a, _)| a == A::TogglePane)

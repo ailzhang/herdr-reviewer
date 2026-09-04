@@ -192,8 +192,9 @@ picker.
 A pane detects git or Sapling once, at open. The review loop is identical; the deltas
 ([specs/sapling.md](specs/sapling.md)):
 
-- **Three surfaces are off**, because each would enumerate a monorepo: **All files**, search,
-  and the **PR** tab. Each says so in one calm line.
+- **Only the Changes tab**, because **All files** and the **PR** tab would each enumerate a
+  monorepo. Both are hidden, so the tab bar is just `Changes`. Search is off too, and says so
+  in one calm line.
 - **`HEAD` is `.`**, the working-copy parent, and there is no index — the working copy is the
   only uncommitted state.
 - **The default base** is the last public ancestor, `last(public() & ::.)`.

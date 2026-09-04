@@ -44,10 +44,6 @@ pub enum PrView {
     NotAuthed(crate::git::Forge, String),
     /// Neither `upstream` nor `origin` names a recognized forge repository.
     NeedsForgeRemote,
-    /// The reviewed worktree is not a git repository, so no forge holds its PRs — the
-    /// static state a Sapling pane opens with; no probe or fetch ever spawns
-    /// (`specs/sapling.md` Disabled surfaces).
-    NotGit,
     /// The fallback `origin` names a hosted forge outside the supported forge hosts.
     UnsupportedHost(String),
     /// The fallback `origin` names a supported host but not a valid repository path.

@@ -127,14 +127,16 @@ sample.
 
 ## Disabled surfaces
 
-Each of these would enumerate or index the worktree, which `SL-SCALE-CHANGED` forbids. Each
-paints a calm one-line state, never an error.
+Each of these would enumerate or index the worktree, which `SL-SCALE-CHANGED` forbids.
 
 | surface     | in a Sapling pane                                                      |
 | ----------- | ----------------------------------------------------------------------- |
-| `All files` | lists nothing and says the tab needs a git repository                  |
+| `All files` | not offered; the tab never paints and its key is inert                 |
+| `PR` tab    | not offered; no probe or fetch ever spawns                             |
 | search      | does not open; the status line says search needs a git repository      |
-| `PR` tab    | a static state naming git; no probe or fetch ever spawns               |
+
+`Changes` is then the only tab, with nothing to switch to, so it reads as a heading without its
+key and the footer drops the tab keys (`input.md`).
 
 ## Failure semantics
 

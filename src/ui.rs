@@ -1271,7 +1271,7 @@ pub fn hit_header(area: Rect, app: &App, keymap: &Keymap, col: u16, row: u16) ->
     if row != area.y {
         return None;
     }
-    let spans = tab_spans(keymap);
+    let spans = tab_spans(app, keymap);
     for &(tab, start, end) in &spans {
         if (start as u16..end as u16).contains(&col) {
             return Some(HeaderHit::Tab(tab));
@@ -1293,15 +1293,31 @@ pub fn hit_header(area: Rect, app: &App, keymap: &Keymap, col: u16, row: u16) ->
     None
 }
 
-/// The three tabs and their labels, left to right, each led by its `tab-*` action's hint key
+/// The pane's tabs and their labels, left to right, each led by its `tab-*` action's hint key
 /// (`specs/input.md`). Column math uses display width, since a bound hint key can be wide.
-fn tab_labels(keymap: &Keymap) -> [(Tab, String); 3] {
+/// A pane offering one tab labels it with its name alone, since there is nothing to switch to
+/// (`specs/sapling.md` Disabled surfaces).
+fn tab_labels(app: &App, keymap: &Keymap) -> Vec<(Tab, String)> {
+    let tabs = app.tabs();
+    tabs.iter()
+        .map(|&tab| {
+            let (name, action) = tab_name_action(tab);
+            match tabs.len() {
+                1 => (tab, name.to_string()),
+                _ => (tab, format!("{} {name}", keymap.hint(action).label())),
+            }
+        })
+        .collect()
+}
+
+/// A tab's header label and the `tab-*` action that switches to it.
+fn tab_name_action(tab: Tab) -> (&'static str, crate::keymap::Action) {
     use crate::keymap::Action as K;
-    [
-        (Tab::Changes, format!("{} Changes", keymap.hint(K::TabChanges).label())),
-        (Tab::AllFiles, format!("{} Files", keymap.hint(K::TabAllFiles).label())),
-        (Tab::Pr, format!("{} PR", keymap.hint(K::TabPr).label())),
-    ]
+    match tab {
+        Tab::Changes => ("Changes", K::TabChanges),
+        Tab::AllFiles => ("Files", K::TabAllFiles),
+        Tab::Pr => ("PR", K::TabPr),
+    }
 }
 const HEADER_LEAD: &str = " ";
 const TAB_GAP: &str = "  ";
@@ -1322,10 +1338,10 @@ fn indicator_glyph(app: &App) -> &'static str {
 
 /// Each tab's `(tab, start_col, end_col)` in the header, the single source the bar paints and
 /// the click hit-tests against.
-fn tab_spans(keymap: &Keymap) -> Vec<(Tab, usize, usize)> {
+fn tab_spans(app: &App, keymap: &Keymap) -> Vec<(Tab, usize, usize)> {
     let mut col = HEADER_LEAD.len();
     let mut out = Vec::new();
-    for (i, (tab, label)) in tab_labels(keymap).iter().enumerate() {
+    for (i, (tab, label)) in tab_labels(app, keymap).iter().enumerate() {
         if i > 0 {
             col += TAB_GAP.len();
         }
@@ -1386,7 +1402,7 @@ fn branch_tip_mark(app: &App, marker: &str) -> String {
 fn base_parts(app: &App, keymap: &Keymap, width: u16) -> Option<(String, String, String)> {
     let (lead, shown, marker, tail) = base_label(app)?;
     // Everything else on the line plus the base's own gap and the suffix's minimum gap.
-    let fixed = header_prefix_len(&tab_spans(keymap))
+    let fixed = header_prefix_len(&tab_spans(app, keymap))
         + scope_chip(app).len()
         + BASE_GAP.len()
         + lead.width()
@@ -1427,7 +1443,7 @@ fn tab_bar_spans(app: &App) -> Vec<Span<'static>> {
     let p = app.palette();
     let bar = Style::default().bg(p.surface0);
     let mut spans = vec![Span::styled(HEADER_LEAD, bar)];
-    for (i, (tab, label)) in tab_labels(app.keymap()).into_iter().enumerate() {
+    for (i, (tab, label)) in tab_labels(app, app.keymap()).into_iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(TAB_GAP, bar));
         }
@@ -1453,7 +1469,7 @@ fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
         BASE_GAP.len() + lead.width() + name.width() + tail.width()
     });
     let suffix = header_suffix(app);
-    let prefix = header_prefix_len(&tab_spans(app.keymap()));
+    let prefix = header_prefix_len(&tab_spans(app, app.keymap()));
     // The suffix keeps the same edge pad as the tab strip's lead.
     let used = prefix + chip.len() + base_width + suffix.width() + HEADER_LEAD.len();
     // Right-align the suffix; at least one gap column when the bar overflows.
@@ -1498,11 +1514,6 @@ fn render_file_list(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.file_rows.is_empty() {
         let msg = match app.tab {
-            // Listing a Sapling worktree would enumerate a monorepo
-            // (`specs/sapling.md` Disabled surfaces).
-            Tab::AllFiles if app.vcs == crate::vcs::VcsKind::Sapling => {
-                "All files needs a git repository"
-            }
             Tab::AllFiles => "no files",
             Tab::Changes if app.awaiting_turn() => app.turn_wait_message(),
             _ => "no changes",
@@ -4311,9 +4322,6 @@ fn pr_empty_msg(
         forge::PrView::NeedsForgeRemote => {
             "The PR tab needs a GitHub, GitLab, or Azure DevOps remote named upstream or origin."
                 .into()
-        }
-        forge::PrView::NotGit => {
-            "Pull requests live on a git forge. This worktree is Sapling.".into()
         }
         forge::PrView::UnsupportedHost(host) => {
             format!(

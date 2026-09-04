@@ -479,3 +479,28 @@ fn the_app_opens_a_sapling_repo_and_lists_its_changes() {
     assert_eq!(app.entries.len(), 1);
     assert_eq!(app.entries[0].path, "src/a.rs");
 }
+
+#[test]
+fn a_sapling_pane_offers_the_changes_tab_alone() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let mut app = herdr_reviewr::app::App::new(root, Scope::Uncommitted, None);
+    app.reload().unwrap();
+    app.keys_expanded = true; // the `go` band, where the tab digits would sit
+
+    let out = painted(&app);
+    let bar = out.lines().next().unwrap();
+    assert!(bar.starts_with(" Changes "), "the one tab reads as a heading, not a control: {bar:?}");
+    for absent in ["1 Changes", "Files", "PR"] {
+        assert!(!bar.contains(absent), "{absent:?} has no place in a Sapling tab bar: {bar:?}");
+    }
+    assert!(!out.contains(" tabs"), "the footer offers no tab digits either:\n{out}");
+
+    // The keys are inert, so a digit typed out of habit cannot land on a hidden tab.
+    for tab in [herdr_reviewr::app::Tab::AllFiles, herdr_reviewr::app::Tab::Pr] {
+        app.set_tab(tab).unwrap();
+        assert_eq!(app.tab, herdr_reviewr::app::Tab::Changes, "{tab:?} is not offered");
+    }
+}
