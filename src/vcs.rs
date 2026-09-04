@@ -199,15 +199,15 @@ pub fn list_stack(kind: VcsKind, root: &Path) -> Result<Vec<sl::StackCommit>, Gi
     }
 }
 
-/// Record a typed pick's SHA spelling: git completes a unique prefix to the
-/// abbreviation, Sapling keeps the spelling as typed — a 7-hex prefix is routinely
-/// ambiguous in a monorepo, and an ambiguous pick would go dormant
-/// (`specs/review-model.md` Base branch).
+/// Record a typed pick's SHA spelling: git completes a unique prefix to the abbreviation,
+/// Sapling to the whole node — a 7-hex prefix is routinely ambiguous in a monorepo, and an
+/// ambiguous pick goes dormant (`specs/review-model.md` Base branch). The public-base
+/// spelling already records whole for that reason.
 #[must_use]
 pub fn complete_pick_spelling(kind: VcsKind, spelling: &str, oid: &str) -> String {
     match kind {
         VcsKind::Git => git::complete_sha_prefix(spelling, oid),
-        VcsKind::Sapling => spelling.to_string(),
+        VcsKind::Sapling => sl::complete_pick_spelling(spelling, oid),
     }
 }
 

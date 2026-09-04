@@ -455,13 +455,30 @@ fn log_line(root: &Path, revset: &str, template: &str) -> Result<Option<String>,
 /// It also turns the miss into empty output rather than an abort, which is what the
 /// chain's skip-never-error contract wants.
 fn probe_revset(spelling: &str) -> String {
-    let all_digits = spelling.bytes().all(|b| b.is_ascii_digit());
-    let hex_shaped =
-        all_digits || (spelling.len() >= 4 && spelling.bytes().all(|b| b.is_ascii_hexdigit()));
-    if hex_shaped {
+    if hex_shaped(spelling) {
         format!("limit(present(id({spelling})), 1)")
     } else {
         format!("limit(present({spelling}), 1)")
+    }
+}
+
+/// Whether [`probe_revset`] reads `spelling` as a hash prefix rather than as a name.
+fn hex_shaped(spelling: &str) -> bool {
+    let all_digits = !spelling.is_empty() && spelling.bytes().all(|b| b.is_ascii_digit());
+    all_digits || (spelling.len() >= 4 && spelling.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The spelling a typed hash prefix records: the whole node it resolved to
+/// (`specs/sapling.md` Scopes). A monorepo holds enough commits that a typed prefix goes
+/// ambiguous later, and an ambiguous pick is skipped, so the reviewer's pinned base would
+/// quietly become the public base. A name records as itself and keeps following its
+/// bookmark. The header paints the node abbreviated either way (`rev_paint`).
+#[must_use]
+pub fn complete_pick_spelling(spelling: &str, oid: &str) -> String {
+    if hex_shaped(spelling) && oid.starts_with(spelling) {
+        oid.to_string()
+    } else {
+        spelling.to_string()
     }
 }
 
@@ -1197,7 +1214,10 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
 
 #[cfg(test)]
 mod tests {
-    use super::{Manifest, Pending, Store, cmdline, diff_counts, probe_revset, text_counts};
+    use super::{
+        Manifest, Pending, Store, cmdline, complete_pick_spelling, diff_counts, probe_revset,
+        text_counts,
+    };
 
     #[test]
     fn a_failed_command_names_itself_the_way_it_would_be_typed() {
@@ -1226,6 +1246,22 @@ mod tests {
             "limit(present(fbcode-nope), 1)",
             "an unknown remote-shaped name must not reach the remote"
         );
+    }
+
+    #[test]
+    fn a_typed_hash_prefix_records_the_whole_node_and_a_name_records_itself() {
+        let node = "2eb84b9c0d1e2f3a4b5c6d7e8f90112233445566";
+        // The prefix resolved through `id()`, so recording it as typed leaves a pin the
+        // monorepo can make ambiguous, and an ambiguous pick goes dormant.
+        assert_eq!(complete_pick_spelling("2eb84b9", node), node);
+        assert_eq!(complete_pick_spelling(node, node), node);
+        // A name resolved as a name and keeps following its bookmark, even one that reads
+        // as hex and even when its own commit happens to start with those letters.
+        assert_eq!(complete_pick_spelling("main", node), "main");
+        assert_eq!(complete_pick_spelling("2eb", "2eb84b9c0d1e"), "2eb");
+        // A hex-shaped spelling that is not this oid's prefix is a name that resolved
+        // elsewhere; it records as itself.
+        assert_eq!(complete_pick_spelling("beefcafe", node), "beefcafe");
         assert_eq!(probe_revset("last(public() & ::.)"), "limit(present(last(public() & ::.)), 1)");
     }
 

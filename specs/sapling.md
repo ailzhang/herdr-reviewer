@@ -128,6 +128,8 @@ branch); only the sources adapt:
   no row says `no commits match`.
 - A hex-shaped spelling resolves as a hash prefix, never as a local revision number —
   bare in a revset, `123456` names a decade-old commit.
+- A typed hash prefix records the whole node it resolved to. A typed name records itself
+  and keeps following its bookmark.
 - A spelling whose prefix has gone ambiguous is skipped, exactly as an unknown one.
 - There is no default-branch name, so the pick can only be replaced, never cleared, exactly as
   a git repository with no default branch.
