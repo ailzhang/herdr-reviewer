@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 
 use crate::git::{BaseStatus, GitFail, ResolvedBase, Worktree};
 use crate::model::{ChangeKind, ChangedFile, Scope};
-use crate::vcs::BranchEnds;
+use crate::vcs::{BranchEnds, Tip};
 
 /// Run `sl <args>` at `root` and return its raw output.
 fn sl_out(root: &Path, args: &[&str]) -> std::io::Result<std::process::Output> {
@@ -463,10 +463,7 @@ pub fn resolve_base(root: &Path, base_flag: Option<&str>) -> Result<BranchEnds, 
 
 /// Resolve one recorded pick to the range's ends. A commit pick needs both of them, so a
 /// commit that has gone away skips the whole pick (`specs/sapling.md` Scopes).
-fn resolve_pick(
-    root: &Path,
-    pick: &Pick,
-) -> Result<Option<(ResolvedBase, Option<String>)>, GitFail> {
+fn resolve_pick(root: &Path, pick: &Pick) -> Result<Option<(ResolvedBase, Option<Tip>)>, GitFail> {
     let Some(tip) = &pick.tip else {
         let Some(base_oid) = resolve_rev(root, &pick.base)? else { return Ok(None) };
         let winner = ResolvedBase::Rev { spelling: pick.base.clone(), oid: base_oid };
@@ -475,24 +472,24 @@ fn resolve_pick(
     if unusable(tip) {
         return Ok(None);
     }
-    // The recorded base is the tip's parent, so both ends come from one commit and one
-    // spawn. Reading the recorded spelling instead would pair an amended commit with the
-    // parent of the node it replaced, which is the same commit only until a rebase.
-    let Some(line) = log_line(root, &successor_revset(tip), "{node} {p1node}")? else {
-        return Ok(None);
-    };
-    let mut ends = line.split_whitespace();
-    let (Some(tip_oid), Some(base_oid)) = (ends.next(), ends.next()) else { return Ok(None) };
+    // The recorded base is the tip's parent, so every end and its title come from one
+    // commit and one spawn. Reading the recorded spelling instead would pair an amended
+    // commit with the parent of the node it replaced, the same commit only until a rebase.
+    let template = "{node} {p1node} {desc|firstline}";
+    let Some(line) = log_line(root, &successor_revset(tip), template)? else { return Ok(None) };
+    let mut fields = line.splitn(3, ' ');
+    let (Some(tip_oid), Some(base_oid)) = (fields.next(), fields.next()) else { return Ok(None) };
     // A root commit's parent is the null node. The range needs both ends, so the pick is
     // skipped exactly as one whose commit has gone away.
     if base_oid.bytes().all(|b| b == b'0') {
         return Ok(None);
     }
-    let (tip_oid, base_oid) = (tip_oid.to_string(), base_oid.to_string());
+    let far =
+        Tip { oid: tip_oid.to_string(), title: fields.next().unwrap_or("").trim().to_string() };
     // The base paints as its own node, never as the `<node>^` that spelled it: the header
     // already names the far end, and `spelling (oid)` would print the pair twice.
-    let winner = ResolvedBase::Rev { spelling: base_oid.clone(), oid: base_oid };
-    Ok(Some((winner, Some(tip_oid))))
+    let winner = ResolvedBase::Rev { spelling: base_oid.to_string(), oid: base_oid.to_string() };
+    Ok(Some((winner, Some(far))))
 }
 
 /// The revset a picked commit resolves through: itself while it is live, and the node that

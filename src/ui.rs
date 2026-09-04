@@ -1367,9 +1367,15 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
     if app.scope != crate::model::Scope::Branch {
         return None;
     }
+    // The title trails the range, so the header's truncation drops the description before
+    // the nodes it describes (`specs/sapling.md` Scopes).
+    let title = match &app.branch_tip {
+        Some(tip) if !tip.title.is_empty() => format!(" · {}", tip.title),
+        _ => String::new(),
+    };
     let tail = match &app.branch_base.skipped {
-        Some(missing) => format!(" · {missing} missing"),
-        None => String::new(),
+        Some(missing) => format!("{title} · {missing} missing"),
+        None => title,
     };
     Some(match &app.branch_base.winner {
         Some(git::ResolvedBase::Branch { name, .. }) => {
@@ -1390,7 +1396,7 @@ fn base_label(app: &App) -> Option<(String, String, String, String)> {
 /// range together, never half of it.
 fn branch_tip_mark(app: &App, marker: &str) -> String {
     match &app.branch_tip {
-        Some(tip) => format!("{marker} → {}", git::abbreviate_oid(tip)),
+        Some(tip) => format!("{marker} → {}", git::abbreviate_oid(&tip.oid)),
         None => marker.to_string(),
     }
 }

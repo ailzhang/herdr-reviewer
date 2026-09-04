@@ -75,7 +75,16 @@ pub fn worktree_of(kind: VcsKind, path: &Path) -> Worktree {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BranchEnds {
     pub base: BaseStatus,
-    pub tip: Option<String>,
+    pub tip: Option<Tip>,
+}
+
+/// The commit a range's far end sits on. The title rides the node so the header cannot
+/// name one commit and describe another (`specs/sapling.md` Scopes).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tip {
+    pub oid: String,
+    /// The commit description's first line, empty when the commit has none.
+    pub title: String,
 }
 
 /// The changed files for `scope` (`specs/review-model.md` Scopes, `specs/sapling.md`).

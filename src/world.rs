@@ -110,7 +110,7 @@ pub fn build_changed(input: &WorldInput) -> Result<(BranchEnds, Vec<ChangedFile>
                 &input.repo,
                 input.scope,
                 base_oid.as_deref(),
-                ends.tip.as_deref(),
+                ends.tip.as_ref().map(|t| t.oid.as_str()),
             )?;
             Ok((ends, changed))
         }

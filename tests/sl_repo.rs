@@ -323,14 +323,21 @@ fn a_commit_pick_reviews_that_commit_against_its_own_parent() {
     let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
     app.reload().unwrap();
 
-    assert_eq!(app.branch_tip.as_deref(), Some(node.as_str()), "the pick pins the far end");
+    assert_eq!(
+        app.branch_tip.as_ref().map(|t| t.oid.as_str()),
+        Some(node.as_str()),
+        "the pick pins the far end"
+    );
     assert_eq!(
         app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
         ["second.txt"],
         "one commit's own changes: not the commit above it, not the uncommitted edit"
     );
-    let want = format!("vs {} → {}", &parent[..7], &node[..7]);
-    assert!(painted(&app).contains(&want), "the header names both ends; wanted {want:?}");
+    let want = format!("vs {} → {} · second commit", &parent[..7], &node[..7]);
+    assert!(
+        painted(&app).contains(&want),
+        "the header names both ends and the commit; wanted {want:?}"
+    );
 }
 
 #[test]
@@ -357,7 +364,11 @@ fn a_commit_pick_follows_the_commit_through_an_amend() {
     let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
     app.reload().unwrap();
 
-    assert_eq!(app.branch_tip.as_deref(), Some(amended.as_str()), "the pick follows its successor");
+    assert_eq!(
+        app.branch_tip.as_ref().map(|t| t.oid.as_str()),
+        Some(amended.as_str()),
+        "the pick follows its successor"
+    );
     let mut paths = app.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>();
     paths.sort_unstable();
     assert_eq!(paths, ["extra.txt", "second.txt"], "the amended content is what is under review");
@@ -513,7 +524,7 @@ fn the_base_picker_leads_with_whole_stack_and_picks_a_commit_by_description() {
     assert_eq!(picked.pick_spelling(), format!("{node}^..{node}"), "the pick records both ends");
     app.base_picker_pick().unwrap();
     assert!(
-        app.branch_tip.as_deref().is_some_and(|tip| tip.starts_with(&node)),
+        app.branch_tip.as_ref().is_some_and(|t| t.oid.starts_with(&node)),
         "picking a commit row pins the range's far end to it"
     );
     assert_eq!(

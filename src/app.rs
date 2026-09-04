@@ -536,7 +536,7 @@ pub struct App {
     /// The commit the `branch` scope's range ends at, when a Sapling pick names one commit
     /// to review. `None` ends the range at the working copy, which is every git range
     /// (`specs/sapling.md` Scopes).
-    pub branch_tip: Option<String>,
+    pub branch_tip: Option<crate::vcs::Tip>,
     /// Bumped by each pick made in this pane, so an in-flight build that read the old pick
     /// fails the landing's input match instead of reverting the pick (`crate::world::WorldInput`).
     base_epoch: u64,
@@ -1510,7 +1510,7 @@ impl App {
                     .map(|r| crate::vcs::file_content(self.vcs, &self.repo, &r, old_path))
                     .unwrap_or_default();
                 let new = match &self.branch_tip {
-                    Some(tip) => crate::vcs::file_content(self.vcs, &self.repo, tip, new_path),
+                    Some(tip) => crate::vcs::file_content(self.vcs, &self.repo, &tip.oid, new_path),
                     None => worktree_content(&self.repo, new_path),
                 };
                 (old, new)
@@ -4234,7 +4234,7 @@ impl App {
         // A pinned far end highlights the commit row it came from. A stack row records the
         // short node and the resolved tip is the full one, so the two match on the shorter.
         let highlight = |r: &BaseChoice| match &self.branch_tip {
-            Some(tip) => r.oid().is_some_and(|o| tip.starts_with(o) || o.starts_with(tip)),
+            Some(tip) => r.oid().is_some_and(|o| tip.oid.starts_with(o) || o.starts_with(&tip.oid)),
             None => self.branch_base.winner.as_ref().map(git::ResolvedBase::name) == Some(r.name()),
         };
         let cursor = rows.iter().position(highlight).unwrap_or(0);
@@ -4328,7 +4328,7 @@ impl App {
     /// while the reviewer looks at `uncommitted` would name a state nothing on screen shows.
     fn export_preamble(&self) -> Option<String> {
         let tip = self.branch_tip.as_ref().filter(|_| self.scope == Scope::Branch)?;
-        Some(format!("reviewing commit {}, not the working copy", git::abbreviate_oid(tip)))
+        Some(format!("reviewing commit {}, not the working copy", git::abbreviate_oid(&tip.oid)))
     }
 
     /// Send/copy every written comment to `target`; consume the whole set only on
