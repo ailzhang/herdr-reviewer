@@ -552,6 +552,28 @@ fn the_stack_offers_the_live_successor_of_an_obsolete_working_copy_parent() {
 }
 
 #[test]
+fn a_changed_binary_costs_no_payload_and_leaves_its_neighbour_alone() {
+    let r = sl_repo_or_skip!();
+    // A blob whose git-mode payload dwarfs the rest of the diff, so a build that reads it
+    // is reading a megabyte to learn (0, 0).
+    let bin = r.path().join("img.bin");
+    std::fs::write(&bin, (0..=255u8).cycle().take(400_000).collect::<Vec<_>>()).unwrap();
+    r.write("t.txt", "hello\n");
+    r.commit_all("base");
+    std::fs::write(&bin, (0..=255u8).rev().cycle().take(400_000).collect::<Vec<_>>()).unwrap();
+    r.write("t.txt", "hello\nworld\n");
+
+    let files =
+        vcs::changed_files(VcsKind::Sapling, &r.root(), Scope::Uncommitted, None, None).unwrap();
+    let by_path = |p: &str| files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{p}"));
+    // The `--no-binary` spelling itself is under test: `sl` aborts on an unknown flag, and
+    // the build fails whole, so a rejected flag never reaches these assertions.
+    assert_eq!(by_path("img.bin").kind, ChangeKind::Modified);
+    assert_eq!((by_path("img.bin").additions, by_path("img.bin").deletions), (0, 0));
+    assert_eq!((by_path("t.txt").additions, by_path("t.txt").deletions), (1, 0));
+}
+
+#[test]
 fn the_base_picker_leads_with_whole_stack_and_picks_a_commit_by_description() {
     let r = sl_repo_or_skip!();
     stacked_repo(&r);

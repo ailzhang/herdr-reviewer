@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-08-21
-Last edited: 2026-09-03
+Last edited: 2026-09-04
 ---
 
 # Sapling repositories
@@ -128,7 +128,8 @@ and parses stdout only. The enumerator is `sl status -Tjson -C`: JSON rather tha
 copy-source lines, `--copies` so a rename diffs real content. The parent pin is `sl whereami`,
 first line, because it answers in milliseconds where `sl log` pays command dispatch. Content at
 a revision is `sl cat -r`; exit 1 is absence, read as empty content. Counts for `uncommitted`
-and `branch` parse one `sl diff --git` per build. A range pinned at both ends reads once and
+and `branch` parse one `sl diff --git --no-binary` per build. A binary file counts `(0, 0)`
+either way, so the diff names it and never carries its payload. A range pinned at both ends reads once and
 caches: two commits' changed set cannot change, so a later poll costs only the pick's own
 resolution. The base picker's commit rows are one
 `sl log -r` over the draft commits connected to `.`, never over the repository's whole draft set.

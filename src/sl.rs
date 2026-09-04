@@ -218,7 +218,7 @@ fn build_changed_set(
     if entries.is_empty() {
         return Ok(Vec::new());
     }
-    let mut diff_args = vec!["diff", "--git"];
+    let mut diff_args = vec!["diff", "--git", "--no-binary"];
     for rev in [from, to].into_iter().flatten() {
         diff_args.extend(["-r", rev]);
     }
@@ -276,6 +276,9 @@ fn header_path(rest: &str) -> String {
 /// hunk lines, keyed under the new path from the `+++ b/` header (the `--- a/` header
 /// for a deletion). A `---`/`+++` line inside a hunk is content — headers only occur
 /// between a `diff --git` boundary and its first `@@`.
+///
+/// A binary file has no hunk, so it lands in no key and reads as `(0, 0)`, the same
+/// answer git's numstat gives for its `-`/`-` row (`specs/sapling.md` Reads).
 fn diff_counts(out: &str) -> HashMap<String, (u32, u32)> {
     let mut map = HashMap::new();
     let mut file: Option<String> = None;
@@ -1116,7 +1119,8 @@ pub fn changed_against_snapshot(root: &Path, id: &str) -> Result<Vec<ChangedFile
     let fresh: Vec<&StatusEntry> =
         now.iter().filter(|e| !manifest.files.contains_key(&e.path)).collect();
     if !fresh.is_empty() {
-        let counts = diff_counts(&sl(root, &["diff", "--git", "-r", &manifest.parent])?);
+        let counts =
+            diff_counts(&sl(root, &["diff", "--git", "--no-binary", "-r", &manifest.parent])?);
         let renamed = rename_sources(&fresh);
         for entry in fresh {
             let source = entry.copy.as_deref().filter(|s| renamed.contains(s));
@@ -1239,6 +1243,23 @@ mod tests {
                    +edited\n";
         let m = diff_counts(out);
         assert_eq!(m["old name.txt"], (1, 1));
+    }
+
+    #[test]
+    fn diff_counts_skips_a_binary_file_without_disturbing_its_neighbour() {
+        // Under `--no-binary` a binary file is one prose line between two boundaries. It
+        // must key nothing, and it must not fold its neighbour's hunk into itself.
+        let out = "diff --git a/img.bin b/img.bin\n\
+                   Binary file img.bin has changed\n\
+                   diff --git a/t.txt b/t.txt\n\
+                   --- a/t.txt\n\
+                   +++ b/t.txt\n\
+                   @@ -1,1 +1,2 @@\n \
+                   hello\n\
+                   +world\n";
+        let m = diff_counts(out);
+        assert!(!m.contains_key("img.bin"), "a binary file reads as (0, 0) by absence");
+        assert_eq!(m["t.txt"], (1, 0));
     }
 
     #[test]
