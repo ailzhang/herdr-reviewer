@@ -14,10 +14,14 @@
 set -uo pipefail
 
 # herdr runs plugin commands with a minimal PATH; ensure jq/git resolve on common installs.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:${PATH:-}"
 
 mode="${1:-toggle}"
+# A server whose binary was replaced on disk since it started reports HERDR_BIN_PATH from
+# /proc/self/exe as "<path> (deleted)", which is not a runnable path. Fall back to PATH so
+# actions keep working until the server is restarted.
 H="${HERDR_BIN_PATH:-herdr}"
+command -v "$H" >/dev/null 2>&1 || H=herdr
 
 # Validate the whole plugin config before reading workspace state or taking any action. The Rust
 # binary owns TOML parsing and defaults, so every plugin entry point shares exactly one contract.

@@ -41,15 +41,23 @@ repo at all.
 
 ## Install from this repo
 
-Requirements: **herdr ≥ 0.7.5**, **git** (and `sl` for Sapling repos) on `PATH`, a **Rust
-toolchain**, a **truecolor** terminal, **macOS or Linux**. The **PR** tab additionally needs an
-authenticated `gh`, `glab`, or `az`.
+Requirements: **herdr ≥ 0.7.5**, **git** (and `sl` for Sapling repos) and **`jq`** on `PATH`, a
+**Rust toolchain**, a **truecolor** terminal, **macOS or Linux**. The **PR** tab additionally
+needs an authenticated `gh`, `glab`, or `az`. `jq` is easy to miss — the pane actions in
+`herdr/pane.sh` parse every herdr API response with it, so without it the pane never opens.
 
 ```bash
 git clone https://github.com/ailzhang/herdr-reviewer
 cd herdr-reviewer
 just install          # cargo build --release → bin/herdr-reviewr (re-signed on macOS)
 herdr plugin link .
+```
+
+Confirm the link took, because the source string is what decides whether your local rebuilds
+ever reach a pane:
+
+```bash
+herdr plugin list     # want: persiyanov.reviewr (reviewr) enabled [local:/path/to/herdr-reviewer]
 ```
 
 No `just`? `cargo build --release && ./scripts/swap-binary.sh target/release/herdr-reviewr bin/herdr-reviewr`
@@ -72,17 +80,28 @@ Open the pane in the current workspace (the plugin id is unchanged from upstream
 herdr plugin action invoke open --plugin persiyanov.reviewr
 ```
 
+That command only works from inside herdr — the action reads its target workspace from the
+environment herdr injects, and refuses with `no workspace context` anywhere else.
+
 reviewr also auto-opens in new worktrees. Bind the toggle in your **herdr** config (the user
 config, not the plugin manifest):
 
 ```toml
 [[keys.command]]
-key = "cmd+r"
+key = "cmd+r"          # on Linux, prefer "prefix+r"
 type = "plugin_action"
 command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — the id, not the name
 ```
 
-`cmd+…` chords reach herdr; many macOS terminals swallow `alt+…` themselves.
+`cmd+…` chords reach herdr; many macOS terminals swallow `alt+…` themselves. Linux terminals
+generally do not deliver `cmd+…` at all, so bind through the herdr prefix instead.
+
+A new binding needs no restart, but it does need a reload:
+
+```bash
+herdr config check            # want: config: ok
+herdr server reload-config    # want: "status":"applied"
+```
 
 **To update:** `git pull && just install`, then toggle the pane off and on. An open pane keeps
 running the old process — a refresh inside reviewr will not pick up a new binary.
@@ -93,6 +112,26 @@ the **last turn** scope, which need herdr around:
 ```bash
 cargo run --release -- ~/some/repo
 ```
+
+### If a pane action does nothing
+
+Pane actions fail silently in the UI: a broken action looks exactly like an unbound key. The
+reason is always in the plugin log, so start there rather than guessing:
+
+```bash
+herdr plugin log --plugin persiyanov.reviewr
+```
+
+An entry with `exit_code: 1` means the key *is* bound and the action ran — read its `stderr`.
+No new entry at all means the keybinding never reached herdr.
+
+One failure worth naming, since the log line (`herdr pane list failed for <ws>`) does not
+point at it: herdr passes the plugin its own binary path in `HERDR_BIN_PATH`, read from
+`/proc/self/exe`. A server whose binary was replaced on disk since it started — any herdr
+self-update — reports that as `/path/to/herdr (deleted)`, which cannot be executed, and every
+action that calls back into herdr fails. `pane.sh` falls back to a `PATH` lookup so reviewr
+keeps working, but other plugins may not; restart the herdr server when convenient. Note that
+`herdr status` still reports `restart_needed: no` in this state.
 
 ## Quick start
 

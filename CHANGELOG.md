@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Pane actions survive a herdr that updated itself.** herdr hands the plugin its own binary
+  path in `HERDR_BIN_PATH`, read from `/proc/self/exe`. A server whose binary was replaced on
+  disk since it started reports that as `/path/to/herdr (deleted)`, so every action that calls
+  back into herdr died on `herdr pane list failed for <ws>` — silently, since a failed action
+  looks like an unbound key. `pane.sh` now falls back to a `PATH` lookup when that path is not
+  runnable.
+
 ## [0.34.0] — 2026-08-20
 
 ### Added
