@@ -1,12 +1,28 @@
 # herdr-reviewr
 
+> [!IMPORTANT]
+> **This is a manual fork of [persiyanov/herdr-reviewr](https://github.com/persiyanov/herdr-reviewr)
+> by [Dmitry Persiyanov](https://github.com/persiyanov), who wrote essentially all of it.**
+> All credit for the original work is theirs. MIT licensed, copyright © 2026 Dmitry Persiyanov
+> — see [LICENSE](LICENSE).
+>
+> "Manual" means it was copied, not forked through GitHub, so **GitHub shows no link between the
+> two repos**. Nothing warns you when you aim at the wrong one. Before you push, open a PR, or
+> file an issue, check where it is going:
+>
+> ```
+> ailzhang/herdr-reviewer   ← this repo, private, the Sapling port lives here
+> persiyanov/herdr-reviewr  ← upstream, public, git-only. Never push the Sapling work here.
+> ```
+>
+> Note the spelling: this repo ends in **-er**, upstream in **-r**. That is not a typo.
+
 A code-review pane for [herdr](https://herdr.dev). Your agent writes the code. You read its
 diff in a pane beside the chat, comment on the lines, and send the notes back. You never leave
 the terminal.
 
-This fork adds **Sapling (`sl`)** support on top of
-[persiyanov/herdr-reviewr](https://github.com/persiyanov/herdr-reviewr), and publishes no
-release binaries — you build it here.
+This fork adds **Sapling (`sl`)** support on top of upstream, and publishes no release
+binaries — you build it here.
 
 ![demo](assets/demo.gif)
 
