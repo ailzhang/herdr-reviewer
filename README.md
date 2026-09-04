@@ -202,6 +202,9 @@ A pane detects git or Sapling once, at open. The review loop is identical; the d
 - **Picking a commit reviews that commit alone**, against its own parent — the header reads
   `vs f01c3d2 → 2eb84b9` and uncommitted edits stay out of the view. Pick `whole stack` to go
   back to the public base.
+- **The send names that commit.** Because the reviewed state isn't the working copy, the export
+  leads with `reviewing commit 2eb84b9, not the working copy`, so the agent knows where the
+  fix belongs. Every other scope reviews the worktree the agent edits, and adds no such line.
 - **Nothing is written inside the repo.** The base pick and turn baselines live in
   `~/.local/state/herdr-reviewr/sl/<worktree>/`. Deleting that directory loses the pick and the
   baseline, never a comment.

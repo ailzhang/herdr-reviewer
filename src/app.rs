@@ -4313,6 +4313,16 @@ impl App {
         }
     }
 
+    /// The line the export leads with, or none (`specs/review-model.md` Export). It names the
+    /// commit under review whenever the active view pins one, since only then do the comments'
+    /// line numbers belong to something other than the worktree the agent edits. The active
+    /// view decides, not the comment: a comment carries no scope, so a pinned commit named
+    /// while the reviewer looks at `uncommitted` would name a state nothing on screen shows.
+    fn export_preamble(&self) -> Option<String> {
+        let tip = self.branch_tip.as_ref().filter(|_| self.scope == Scope::Branch)?;
+        Some(format!("reviewing commit {}, not the working copy", git::abbreviate_oid(tip)))
+    }
+
     /// Send/copy every written comment to `target`; consume the whole set only on
     /// success. A failed export leaves all comments in place (`specs/review-model.md`).
     /// Reports whether the comments were delivered.
@@ -4322,7 +4332,7 @@ impl App {
             return false;
         }
         let refs: Vec<&Comment> = self.store.iter().collect();
-        let text = format_all(&refs);
+        let text = format_all(&refs, self.export_preamble().as_deref());
         let n = refs.len();
         logln!("export ({n}) -> {} ::\n{text}", target.label());
         let delivered = match target.export(&text) {

@@ -28,11 +28,15 @@ fn normalize_text(text: &str) -> String {
         .join("\n")
 }
 
-/// Many comments, sorted by file then start line, one blank line between blocks.
-pub fn format_all(comments: &[&Comment]) -> String {
+/// Many comments, sorted by file then start line, one blank line between blocks. A
+/// `preamble` leads the payload as a block of its own, naming the state the comments were
+/// written against when that is not the worktree the agent edits
+/// (`specs/review-model.md` Export).
+pub fn format_all(comments: &[&Comment], preamble: Option<&str>) -> String {
     let mut sorted = comments.to_vec();
     sorted.sort_by(|a, b| a.file.cmp(&b.file).then(a.start.cmp(&b.start)));
-    sorted.iter().map(|c| format_comment(c)).collect::<Vec<_>>().join("\n\n")
+    let blocks = sorted.iter().map(|c| format_comment(c));
+    preamble.map(ToOwned::to_owned).into_iter().chain(blocks).collect::<Vec<_>>().join("\n\n")
 }
 
 /// A destination comments can be exported to. Export succeeds or errors as a whole.
@@ -226,7 +230,17 @@ mod tests {
         let b = comment("b.rs", Side::New, 5, 5, "+x", "two");
         let a2 = comment("a.rs", Side::New, 20, 20, "+y", "later");
         let a1 = comment("a.rs", Side::New, 3, 3, "+z", "earlier");
-        let out = format_all(&[&b, &a2, &a1]);
+        let out = format_all(&[&b, &a2, &a1], None);
         assert_eq!(out, "a.rs:3\n+z\nearlier\n\na.rs:20\n+y\nlater\n\nb.rs:5\n+x\ntwo");
+    }
+
+    #[test]
+    fn a_preamble_leads_the_payload_as_a_block_of_its_own() {
+        let c = comment("a.rs", Side::New, 3, 3, "+z", "revert this");
+        let out = format_all(&[&c], Some("reviewing commit 2eb84b9, not the working copy"));
+        assert_eq!(
+            out, "reviewing commit 2eb84b9, not the working copy\n\na.rs:3\n+z\nrevert this",
+            "one blank line separates it, like any other block"
+        );
     }
 }

@@ -310,6 +310,87 @@ fn a_commit_pick_reviews_that_commit_against_its_own_parent() {
     assert!(painted(&app).contains(&want), "the header names both ends; wanted {want:?}");
 }
 
+/// Captures the export payload, so a test can read what the agent would have been sent.
+#[derive(Default)]
+struct Captured(std::cell::RefCell<String>);
+
+impl herdr_reviewr::export::ExportTarget for Captured {
+    fn label(&self) -> &'static str {
+        "captured"
+    }
+    fn success_message(&self, count: usize) -> String {
+        format!("exported {count}")
+    }
+    fn failure_message(&self) -> String {
+        "unreachable".to_string()
+    }
+    fn export(&self, text: &str) -> anyhow::Result<()> {
+        self.0.replace(text.to_string());
+        Ok(())
+    }
+}
+
+#[test]
+fn a_commit_pick_names_the_commit_in_the_export_preamble() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Branch, None);
+    app.reload().unwrap();
+
+    // A comment on the reviewed commit's own added line.
+    app.focus = herdr_reviewr::app::Focus::Diff;
+    app.diff_cursor =
+        app.diff.rows.iter().position(|row| row.marker() == '+').expect("an added row");
+    app.start_comment();
+    for ch in "revert this".chars() {
+        app.input_push(ch);
+    }
+    app.submit_comment();
+    assert_eq!(app.store.len(), 1);
+
+    let target = Captured::default();
+    assert!(app.export(&target));
+    let sent = target.0.borrow().clone();
+    let want = format!("reviewing commit {}, not the working copy", &node[..7]);
+    assert_eq!(
+        sent.lines().next().unwrap(),
+        want,
+        "the export leads with the commit under review, since the worktree is not it"
+    );
+    assert!(sent.contains("\n\nsecond.txt:1\n"), "the comment block follows it: {sent:?}");
+}
+
+#[test]
+fn an_uncommitted_send_names_no_commit_even_while_a_pick_stands() {
+    let r = sl_repo_or_skip!();
+    stacked_repo(&r);
+    let root = r.root();
+    let _guard = StoreGuard::for_root(&root);
+    let node = r.sl(&["log", "-r", ".^", "-T", "{node}"]);
+    vcs::write_base_pick(VcsKind::Sapling, &root, &format!("{node}^..{node}")).unwrap();
+    let mut app = herdr_reviewr::app::App::new(root.clone(), Scope::Uncommitted, None);
+    app.reload().unwrap();
+
+    app.focus = herdr_reviewr::app::Focus::Diff;
+    app.diff_cursor =
+        app.diff.rows.iter().position(|row| row.marker() == '+').expect("an added row");
+    app.start_comment();
+    app.input_push('x');
+    app.submit_comment();
+
+    let target = Captured::default();
+    assert!(app.export(&target));
+    assert!(
+        target.0.borrow().starts_with("dirty.txt:"),
+        "the active scope reviews the worktree, so nothing is named: {:?}",
+        target.0.borrow()
+    );
+}
+
 #[test]
 fn the_stack_lists_the_working_copy_parent_and_its_draft_ancestors() {
     let r = sl_repo_or_skip!();

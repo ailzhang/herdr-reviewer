@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-21
+Last edited: 2026-09-03
 ---
 
 # Review model
@@ -143,8 +143,10 @@ why drop this? it is still needed
 | footer    | the comment's `text`, trimmed, line breaks kept, runs of 2+ newlines collapsed to one |
 | separator | one blank line between comments                                                       |
 | order     | by `file`, then `start`                                                               |
-| preamble  | none                                                                                  |
+| preamble  | `reviewing commit <short-node>, not the working copy`, else none                      |
 
+- The preamble appears only where the active scope pins the range's far end, which is a Sapling commit pick (`sapling.md`). Every other export leads with its first comment block, because the reviewed state is the worktree the agent edits.
+- The active scope decides the preamble, never the comment. A comment records no scope, so a send from `uncommitted` names no commit even while a commit pick stands.
 - Send injects every block into the agent input, focuses the agent pane, and clears the list. It never submits (paste framing: `herdr-host.md`).
 - Copy writes the same blocks to the system clipboard, then clears the list.
 
