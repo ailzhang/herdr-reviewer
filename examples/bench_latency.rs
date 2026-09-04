@@ -14,6 +14,7 @@ use herdr_reviewr::git;
 use herdr_reviewr::highlight::Highlighter;
 use herdr_reviewr::model::Scope;
 use herdr_reviewr::theme;
+use herdr_reviewr::vcs::{self, VcsKind};
 
 fn ms(f: impl FnOnce()) -> f64 {
     let t = Instant::now();
@@ -35,11 +36,16 @@ fn row(name: &str, (first, min, med): (f64, f64, f64)) {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let repo = PathBuf::from(args.next().expect("usage: bench_latency <repo> [label]"));
-    let label = args.next().unwrap_or_else(|| repo.display().to_string());
-    assert!(git::is_repo(&repo), "not a git repo: {}", repo.display());
+    let arg = PathBuf::from(args.next().expect("usage: bench_latency <repo> [label]"));
+    let label = args.next().unwrap_or_else(|| arg.display().to_string());
+    let (repo, kind) = vcs::resolve_repo(&arg);
     let hl = Highlighter::new(theme::resolve(None).syntax);
-    println!("== {label} ==");
+    println!("== {label} ({kind:?}) ==");
+    if kind == VcsKind::Sapling {
+        bench_sapling(&repo, &hl);
+        return;
+    }
+    assert!(git::is_repo(&repo), "not a git repo: {}", repo.display());
 
     // --- Components of reload() -------------------------------------------------
     let changed = git::changed_files(&repo, Scope::Uncommitted, None).unwrap();
@@ -163,6 +169,105 @@ fn main() {
         sample(3, || {
             git::changed_files(&repo, Scope::Uncommitted, None).unwrap();
             git::all_files(&repo).unwrap();
+        }),
+    );
+    println!();
+}
+
+/// The Sapling arm. A Sapling pane has no `All files` tab, no `PR` tab, and no search
+/// (`specs/sapling.md` Disabled surfaces), so the reload is the changed set alone. Every
+/// call here reads: `snapshot` digests in memory and persists nothing, so this is safe to
+/// point at a live monorepo checkout without touching a pane's baseline.
+fn bench_sapling(repo: &std::path::Path, hl: &Highlighter) {
+    let sl = VcsKind::Sapling;
+    let changed = vcs::changed_files(sl, repo, Scope::Uncommitted, None, None).unwrap();
+    println!("{} changed (uncommitted)", changed.len());
+    row(
+        "changed_files (uncommitted)",
+        sample(5, || {
+            vcs::changed_files(sl, repo, Scope::Uncommitted, None, None).unwrap();
+        }),
+    );
+    row(
+        "resolve_base (pick chain + public base)",
+        sample(5, || {
+            vcs::resolve_base(sl, repo, None).unwrap();
+        }),
+    );
+    let ends = vcs::resolve_base(sl, repo, None).unwrap();
+    let base = ends.base.winner.as_ref().map(git::ResolvedBase::oid).map(str::to_string);
+    let tip = ends.tip.as_ref().map(|t| t.oid.clone());
+    row(
+        "changed_files (branch, incl. resolve)",
+        sample(5, || {
+            let ends = vcs::resolve_base(sl, repo, None).unwrap();
+            let base = ends.base.winner.as_ref().map(git::ResolvedBase::oid);
+            vcs::changed_files(sl, repo, Scope::Branch, base, ends.tip.as_ref().map(|t| &*t.oid))
+                .unwrap();
+        }),
+    );
+    println!("  branch base {base:?} tip {tip:?}");
+
+    // The turn tracker's per-poll cost. First is the cold read-and-hash of every dirty
+    // file; the rest ride the stat gate, which is the number a running pane pays.
+    let mut turns = herdr_reviewr::sl::TurnStore::open(repo.to_path_buf());
+    row(
+        "snapshot (turn poll)",
+        sample(5, || {
+            turns.snapshot().unwrap();
+        }),
+    );
+    match turns.read_baseline() {
+        Some(id) => row(
+            "changed_against_snapshot (last-turn)",
+            sample(5, || {
+                herdr_reviewr::sl::changed_against_snapshot(repo, &id).unwrap();
+            }),
+        ),
+        None => println!("no persisted baseline; skipping last-turn"),
+    }
+
+    // Opening the base picker: both reads run together, so its wait is the slower one.
+    row(
+        "list_stack (base picker)",
+        sample(5, || {
+            herdr_reviewr::sl::list_stack(repo).unwrap();
+        }),
+    );
+    row(
+        "list_bookmarks (base picker)",
+        sample(5, || {
+            herdr_reviewr::sl::list_bookmarks(repo).unwrap();
+        }),
+    );
+
+    // Opening one changed file: the old side is `sl cat`, the new side the worktree.
+    let Some(cf) = changed.iter().find(|f| f.kind != herdr_reviewr::model::ChangeKind::Deleted)
+    else {
+        println!("clean worktree; skipping diff opens");
+        return;
+    };
+    let path = cf.path.clone();
+    let parent = vcs::uncommitted_base(sl);
+    row(
+        &format!("diff open, Changes COLD ({path})"),
+        sample(3, || {
+            let mut cache = DiffCache::new();
+            let old = vcs::file_content(sl, repo, parent, &path);
+            let new = std::fs::read_to_string(repo.join(&path)).unwrap_or_default();
+            cache.get(path.clone(), None, &old, &new, hl);
+        }),
+    );
+    let mut warm = DiffCache::new();
+    let old0 = vcs::file_content(sl, repo, parent, &path);
+    let new0 = std::fs::read_to_string(repo.join(&path)).unwrap_or_default();
+    warm.get(path.clone(), None, &old0, &new0, hl);
+    row(
+        "diff open, Changes WARM (same file re-poll)",
+        sample(5, || {
+            let old = vcs::file_content(sl, repo, parent, &path);
+            let new = std::fs::read_to_string(repo.join(&path)).unwrap_or_default();
+            warm.get(path.clone(), None, &old, &new, hl);
         }),
     );
     println!();
