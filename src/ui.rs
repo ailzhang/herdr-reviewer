@@ -1471,6 +1471,22 @@ fn tab_bar_spans(app: &App) -> Vec<Span<'static>> {
     spans
 }
 
+/// The reviewed worktree root as the header names it: the home directory spelled `~`
+/// (specs/tui.md).
+fn repo_label(app: &App) -> String {
+    let home = dirs::home_dir();
+    match home.as_deref().and_then(|home| app.repo.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => app.repo.display().to_string(),
+    }
+}
+
+/// Columns between the worktree root and the scope group before it.
+const REPO_GAP: &str = "  ";
+/// The narrowest worktree root worth painting: `…` plus a few columns of the last component.
+const REPO_MIN: usize = 6;
+
 fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
     let chip = scope_chip(app);
     let base = base_parts(app, app.keymap(), area.width);
@@ -1481,8 +1497,17 @@ fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
     let prefix = header_prefix_len(&tab_spans(app, app.keymap()));
     // The suffix keeps the same edge pad as the tab strip's lead.
     let used = prefix + chip.len() + base_width + suffix.width() + HEADER_LEAD.len();
+    // The worktree root takes the slack between the scope group and the suffix, left-elided
+    // to what fits behind one pad column, and leaves the header before it would crowd the
+    // counts (specs/tui.md). It never enters `used`, so the base and hit-test math stand.
+    let slack = (area.width as usize).saturating_sub(used);
+    let repo = slack
+        .checked_sub(REPO_GAP.len() + 1)
+        .filter(|room| *room >= REPO_MIN)
+        .map(|room| elide_head(&repo_label(app), room));
+    let repo_width = repo.as_ref().map_or(0, |r| REPO_GAP.len() + r.width());
     // Right-align the suffix; at least one gap column when the bar overflows.
-    let pad = (area.width as usize).saturating_sub(used).max(1);
+    let pad = slack.saturating_sub(repo_width).max(1);
 
     // A quiet surface bar: the active tab in bright blue, the inactive one dimmed, the
     // clickable scope control accented so it reads as a button.
@@ -1500,6 +1525,10 @@ fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
         if !tail.is_empty() {
             spans.push(Span::styled(tail, bar.fg(p.orange)));
         }
+    }
+    if let Some(repo) = repo {
+        spans.push(Span::styled(REPO_GAP, bar));
+        spans.push(Span::styled(repo, bar.fg(p.dim2)));
     }
     spans.push(Span::styled(" ".repeat(pad), bar));
     // The suffix repaints in parts so the totals get the file rows' green/red; the parts spell

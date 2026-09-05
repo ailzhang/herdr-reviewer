@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-09-03
+Last edited: 2026-09-05
 ---
 
 # TUI
@@ -11,7 +11,7 @@ The terminal frame: the pane layout, the tabs, and how the view stays current.
 ## Overview
 
 ```
-┌ 1 Changes  2 Files  3 PR  [uncommitted]                    9 changed  +42 −18 ┐
+┌ 1 Changes  2 Files  3 PR  [uncommitted]  ~/work/api        9 changed  +42 −18 ┐
 │ ⋯  11 unmodified lines                       │ M llm_registry.py  +18 -8  │
 │ 40    def resolve(self, name):               │ M deep_research.py +155-62 │
 │ 41 ▌  from .z import w                         │ D old_runner.py    -47     │
@@ -34,6 +34,7 @@ The terminal frame: the pane layout, the tabs, and how the view stays current.
 - A skipped pick or `--base` shows after the base, `vs main · dev missing` — and after the empty state too, `no base · dev missing`, so a dormant choice never reads as never-chosen. A skipped non-branch spelling uses the stored spelling, `· HEAD~1 missing`.
 - A base name the header cannot fit truncates with a trailing `…`. A `spelling (sha)` base clips the spelling and keeps `(sha)` when `(sha)` still fits. The picker always shows it whole. Too narrow for even one column of the name, the base leaves the header rather than paint a nameless `vs`.
 - The header's line totals drop a zero side and vanish when nothing changed, like a file row's stats (`file-list.md`).
+- The header names the reviewed worktree root after the scope group, dim, the home directory spelled `~`. It takes only the slack before the counts: a root that cannot fit elides from the left behind a leading `…`, cut at a `/`, and leaves the header entirely when fewer than a few columns remain. It never displaces the tabs, the scope, the base, or the counts.
 - The active tab sets both panes: diff and changed files in `Changes`, content and repo tree in `All files`, checks and comments in `PR` (`diff-view.md`, `pr-tab.md`).
 - The comment input opens inline, directly under the last line of the selection, and grows as you type (`input.md`). It is never a footer band.
 - The footer is a live action bar (`input.md`).

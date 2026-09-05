@@ -579,6 +579,35 @@ fn the_header_totals_the_scope_and_hides_them_at_zero() {
     assert!(!header.contains('+'), "an empty changeset shows no totals:\n{header}");
 }
 
+#[test]
+fn the_header_names_the_worktree_root_and_elides_it_from_the_left() {
+    let r = Repo::init();
+    r.write("edited.rs", "old\n");
+    r.commit_all("init");
+    r.write("edited.rs", "new\n");
+    let app = app_on(&r);
+    // `app.repo` is the resolved top level, so the header spells that, not the fixture's
+    // unresolved path. Outside the home directory it is the full path.
+    let root = app.repo.display().to_string();
+    let last = app.repo.file_name().unwrap().to_str().unwrap().to_owned();
+
+    let header = render_at(&app, 200).lines().next().unwrap().to_string();
+    assert!(header.contains(&root), "wide enough, the header names the whole root:\n{header}");
+    let after = header.split(&root).nth(1).unwrap();
+    assert!(after.contains("1 changed"), "the root sits before the counts:\n{header}");
+
+    // Too narrow for the whole path, it keeps the tail behind a leading `…`, cut at a `/`.
+    let header = render_at(&app, 64 + 12).lines().next().unwrap().to_string();
+    assert!(!header.contains(&root), "the whole root cannot fit:\n{header}");
+    assert!(header.contains(&format!("…/{last}")), "the tail survives:\n{header}");
+    assert!(header.contains("1 changed"), "the counts stay:\n{header}");
+
+    // At the exact fit, the root leaves the header rather than crowd the counts.
+    let header = render_at(&app, 64).lines().next().unwrap().to_string();
+    assert!(!header.contains('…'), "no elided stub at exact fit:\n{header}");
+    assert!(header.contains("1 changed"), "{header}");
+}
+
 /// The last non-blank rendered row — the footer band.
 fn footer_line(out: &str) -> String {
     out.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default().to_string()

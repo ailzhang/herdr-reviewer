@@ -14,6 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exactly one of its linked worktrees holds another pane of the workspace (an editor, a
   shell), the open reviews that worktree. New config key `prefer_linked_worktree`
   (default `true`) turns this off.
+- **The header names the worktree root.** After the scope, the Changes and Files header shows
+  the reviewed root, home-abbreviated to `~/…`, so a pane opened on a linked worktree says so
+  at a glance. It takes only the slack before the counts and elides from the left when narrow.
 
 ### Fixed
 - **Pane actions survive a herdr that updated itself.** herdr hands the plugin its own binary
