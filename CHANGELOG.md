@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **The toggle follows the workspace into a linked worktree.** An agent launched in the main
+  checkout that works in a git or Sapling worktree through subshells never moves its own
+  process there, so every cwd read on the focused pane named the main checkout and the toggle
+  reviewed the wrong tree. When the resolved checkout is a repository's main worktree and
+  exactly one of its linked worktrees holds another pane of the workspace (an editor, a
+  shell), the open reviews that worktree. New config key `prefer_linked_worktree`
+  (default `true`) turns this off.
+
 ### Fixed
 - **Pane actions survive a herdr that updated itself.** herdr hands the plugin its own binary
   path in `HERDR_BIN_PATH`, read from `/proc/self/exe`. A server whose binary was replaced on

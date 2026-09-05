@@ -66,13 +66,14 @@ impl Config {
     }
 }
 
-const PLUGIN_CONFIG_KEYS: [&str; 10] = [
+const PLUGIN_CONFIG_KEYS: [&str; 11] = [
     "theme",
     "default_scope",
     "navigator_position",
     "toggle_placement",
     "toggle_direction",
     "auto_open",
+    "prefer_linked_worktree",
     "github_host",
     "gitlab_host",
     "azure_devops_host",
@@ -162,6 +163,7 @@ pub struct PluginConfig {
     toggle_placement: TogglePlacement,
     toggle_direction: ToggleDirection,
     auto_open: bool,
+    prefer_linked_worktree: bool,
     github_host: Option<String>,
     gitlab_host: Option<String>,
     azure_devops_host: Option<String>,
@@ -177,6 +179,7 @@ impl Default for PluginConfig {
             toggle_placement: TogglePlacement::Split,
             toggle_direction: ToggleDirection::Right,
             auto_open: true,
+            prefer_linked_worktree: true,
             github_host: None,
             gitlab_host: None,
             azure_devops_host: None,
@@ -210,6 +213,12 @@ impl PluginConfig {
 
     pub fn auto_open(&self) -> bool {
         self.auto_open
+    }
+
+    /// Whether a manual open follows the workspace's panes into a linked worktree of the
+    /// resolved main checkout (`specs/herdr-host.md`, Repo discovery).
+    pub fn prefer_linked_worktree(&self) -> bool {
+        self.prefer_linked_worktree
     }
 
     pub fn github_host(&self) -> Option<&str> {
@@ -256,6 +265,7 @@ impl PluginConfig {
             "toggle_placement": self.toggle_placement.as_str(),
             "toggle_direction": self.toggle_direction.as_str(),
             "auto_open": self.auto_open,
+            "prefer_linked_worktree": self.prefer_linked_worktree,
             "github_host": self.github_host,
             "gitlab_host": self.gitlab_host,
             "azure_devops_host": self.azure_devops_host,
@@ -415,6 +425,11 @@ fn parse_plugin_config(path: &Path) -> Result<PluginConfig, PluginConfigError> {
     if let Some(value) = table.get("auto_open") {
         config.auto_open =
             value.as_bool().ok_or_else(|| value_error(path, "auto_open", "a boolean"))?;
+    }
+    if let Some(value) = table.get("prefer_linked_worktree") {
+        config.prefer_linked_worktree = value
+            .as_bool()
+            .ok_or_else(|| value_error(path, "prefer_linked_worktree", "a boolean"))?;
     }
     if let Some(value) = table.get("github_host") {
         config.github_host = Some(parse_forge_host(path, "github_host", value)?);
@@ -681,6 +696,7 @@ mod tests {
         assert_eq!(config.toggle_placement(), TogglePlacement::Split);
         assert_eq!(config.toggle_direction(), ToggleDirection::Right);
         assert!(config.auto_open());
+        assert!(config.prefer_linked_worktree());
         assert_eq!(config.github_host(), None);
     }
 
@@ -696,6 +712,7 @@ mod tests {
                 "toggle_placement = \"overlay\"\n",
                 "toggle_direction = \"down\"\n",
                 "auto_open = false\n",
+                "prefer_linked_worktree = false\n",
                 "github_host = \"GitHub.Example.COM\"\n",
             ),
         )
@@ -707,6 +724,7 @@ mod tests {
         assert_eq!(config.toggle_placement(), TogglePlacement::Overlay);
         assert_eq!(config.toggle_direction(), ToggleDirection::Down);
         assert!(!config.auto_open());
+        assert!(!config.prefer_linked_worktree());
         assert_eq!(config.github_host(), Some("github.example.com"));
     }
 
@@ -741,6 +759,7 @@ mod tests {
             ("toggle_placement = \"left\"\n", "`toggle_placement`"),
             ("toggle_direction = \"left\"\n", "`toggle_direction`"),
             ("auto_open = \"yes\"\n", "`auto_open`"),
+            ("prefer_linked_worktree = \"yes\"\n", "`prefer_linked_worktree`"),
             ("github_host = \"https://github.example.com\"\n", "`github_host`"),
             ("github_host = \"github.com\"\n", "`github_host`"),
             ("github_host = \"gitlab.com\"\n", "`github_host`"),
@@ -1015,6 +1034,7 @@ mod tests {
         assert_eq!(object["toggle_placement"], "split");
         assert_eq!(object["toggle_direction"], "right");
         assert_eq!(object["auto_open"], true);
+        assert_eq!(object["prefer_linked_worktree"], true);
         assert!(object["github_host"].is_null());
         let keybindings = object["keybindings"].as_object().unwrap();
         assert_eq!(

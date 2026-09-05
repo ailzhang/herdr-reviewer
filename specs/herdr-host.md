@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-23
-Last edited: 2026-08-21
+Last edited: 2026-09-05
 ---
 
 # herdr host
@@ -65,6 +65,7 @@ Placement settings come from the plugin config (`config.md`). Each action and ev
 toggle_placement = "overlay"   # split | overlay | zoomed | tab   (default: split)
 toggle_direction = "down"      # right | down, split only         (default: right)
 auto_open = false              # auto-open on worktree.created    (default: true)
+prefer_linked_worktree = false # follow panes into a linked worktree (default: true)
 ```
 
 A manual open gives focus to reviewr. The event auto-opens `split` and `tab` only, never takes focus, and does nothing with `auto_open = false`. Like `open`, the event opens nothing when the workspace already holds a reviewr pane. The event acts on the workspace its payload names, never the focused one. A missing key uses its default. Invalid plugin config follows `config.md`.
@@ -92,6 +93,8 @@ A `tab` open names the fresh tab `reviewr`, using the `tab_id` the pane-open res
 The binary reviews its own pane's working directory, normalized to its top level — git first, then Sapling (`sapling.md`). A directory outside any repository shows an empty state.
 
 A manual open prefers the focused pane's live foreground directory over its recorded launch directory. Launch a `claude -w <worktree>` pane from the main checkout, and the open reviews the worktree. A live directory outside any git or Sapling repository falls back to the launch directory. A failed or empty live read falls back the same way. The open refuses only when no candidate directory is inside a git or Sapling repository. The refusal names every directory it rejected. The event open takes its directory from the event payload. It reads no pane.
+
+With `prefer_linked_worktree` on, a manual open that resolved to a repository's main checkout looks at the workspace's other panes before it opens. When exactly one linked worktree of that repository, as its VCS lists them, holds a pane's live foreground directory, the open reviews that worktree instead. An agent launched in the main checkout that works in a worktree through subshells never moves its own process there, and this is how the open follows it. Panes in two linked worktrees, or in none, leave the open on the main checkout. An open that resolved to a linked worktree stays there. The event open never does this.
 
 ## Sending to the agent
 

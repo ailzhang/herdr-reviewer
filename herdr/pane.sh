@@ -51,6 +51,7 @@ unreadable_config() {
 placement=$(cfg_field toggle_placement) || unreadable_config
 direction=$(cfg_field toggle_direction) || unreadable_config
 auto_open=$(cfg_field auto_open) || unreadable_config
+prefer_linked=$(cfg_field prefer_linked_worktree) || unreadable_config
 
 # The stable launch paths track the live plugin root from here, not from the install step:
 # the build step runs in a staging checkout that herdr renames afterwards, so only a runtime
@@ -250,6 +251,41 @@ elif ! is_repo "$cwd"; then
   # Name every candidate the check rejected, or a refusal over an inspected-but-unusable
   # live cwd would read as if no directory was ever tried.
   refuse "not a git or sl repo: '${cwd:-<no cwd>}'${live:+ (live cwd '$live')}"
+fi
+
+# A workspace that works in a linked worktree often has no pane whose own process sits
+# there: the agent stays where it was launched and reaches the worktree through subshells,
+# so both cwd reads above name the main checkout. Follow the workspace's other panes instead
+# (specs/herdr-host.md, Repo discovery). Only a linked worktree of the resolved checkout
+# qualifies, listed by the VCS that owns the root, and exactly one such worktree must hold a
+# pane: two would be a guess, none leaves the root alone. A root that is itself a linked
+# worktree is already the answer. Panes match by path prefix against that one listing, so
+# the sweep costs one VCS call, not one per pane.
+repo_root() {
+  git -C "$1" rev-parse --show-toplevel 2>/dev/null && return 0
+  [ -d "$1" ] && (cd "$1" && HGPLAIN=1 sl root 2>/dev/null)
+}
+# The repository's worktrees, one path per line, the main checkout first. Empty when the
+# root's VCS lists none.
+worktree_paths() {
+  if is_git_repo "$1"; then
+    git -C "$1" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p'
+  else
+    (cd "$1" && HGPLAIN=1 sl worktree list -Tjson 2>/dev/null) |
+      jq -r 'sort_by(.role != "main") | .[].path' 2>/dev/null
+  fi
+}
+if [ "$mode" != auto-open ] && [ "$prefer_linked" = "true" ]; then
+  root=$(repo_root "$cwd")
+  worktrees=$(worktree_paths "$root")
+  if [ -n "$root" ] && [ "$(printf '%s\n' "$worktrees" | sed -n 1p)" = "$root" ]; then
+    picked=$(printf '%s' "$panes_json" | jq -r --arg linked "$(printf '%s\n' "$worktrees" | sed 1d)" '
+      ($linked | split("\n") | map(select(length > 0))) as $l
+      | [.result.panes[] | (.foreground_cwd // empty) as $c
+         | $l[] as $w | select($c == $w or ($c | startswith($w + "/"))) | $w]
+      | unique | if length == 1 then .[0] else empty end' 2>/dev/null)
+    [ -z "$picked" ] || cwd="$picked"
+  fi
 fi
 
 # A manual open takes focus. The event never does (specs/herdr-host.md).

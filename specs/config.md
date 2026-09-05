@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-07-10
-Last edited: 2026-09-04
+Last edited: 2026-09-05
 ---
 
 # Configuration
@@ -19,6 +19,7 @@ navigator_position = "bottom"
 toggle_placement = "overlay"
 toggle_direction = "down"
 auto_open = false
+prefer_linked_worktree = false
 github_host = "github.example.com"
 gitlab_host = "git.corp.example"
 azure_devops_host = "tfs.corp.example"
@@ -38,6 +39,7 @@ collapse = ["h", "left"]
 | `toggle_placement`   | `split`, `overlay`, `zoomed`, or `tab`                                             |
 | `toggle_direction`   | `right` or `down`                                                                  |
 | `auto_open`          | boolean                                                                            |
+| `prefer_linked_worktree` | boolean                                                                        |
 | `github_host`        | bare hostname other than `github.com`                                              |
 | `gitlab_host`        | bare hostname other than `gitlab.com`                                              |
 | `azure_devops_host`  | bare hostname other than `dev.azure.com`                                           |

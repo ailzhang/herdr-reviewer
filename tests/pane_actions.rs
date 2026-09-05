@@ -86,6 +86,39 @@ fn init_repo(dir: &Path, name: &str) -> PathBuf {
     repo
 }
 
+/// A linked git worktree of `repo` at `repo`'s parent `/name`, on a fresh branch of the same
+/// name. Gives `repo` its first commit when it has none, since `worktree add` needs a HEAD.
+fn add_worktree(repo: &Path, name: &str) -> PathBuf {
+    let git = |args: &[&str]| {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .status()
+                .unwrap()
+                .success(),
+            "git {args:?}"
+        );
+    };
+    git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+    let worktree = repo.parent().unwrap().join(name);
+    git(&["worktree", "add", "-q", worktree.to_str().unwrap(), "-b", name]);
+    worktree
+}
+
+/// One `pane list` answer holding `panes`, each `(pane_id, foreground_cwd)`, in the live
+/// envelope shape (docs/herdr-api-notes.md).
+fn panes_with_cwds(dir: &Path, panes: &[(&str, &Path)]) {
+    let panes: Vec<serde_json::Value> = panes
+        .iter()
+        .map(|(id, cwd)| serde_json::json!({"pane_id": id, "foreground_cwd": cwd}))
+        .collect();
+    fs::write(dir.join("panes.json"), serde_json::json!({"result": {"panes": panes}}).to_string())
+        .unwrap();
+}
+
 /// One `pane list` answer: a single pane whose entry carries a live `foreground_cwd`,
 /// in the live envelope shape (docs/herdr-api-notes.md).
 fn pane_with_cwd(dir: &Path, pane: &str, foreground_cwd: &Path) {
@@ -838,4 +871,112 @@ fn split_placement_open_renames_no_tab() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let calls = fs::read_to_string(&log).unwrap();
     assert!(!calls.contains("tab rename"), "{calls}");
+}
+
+/// The shape behind the linked-worktree tests: the focused agent pane sits in the main
+/// checkout, and another pane of the workspace (an editor, a shell) sits inside a linked
+/// worktree of it. Returns the main checkout and the worktree.
+fn main_and_linked_worktree(dir: &Path) -> (PathBuf, PathBuf) {
+    let main = init_repo(dir, "main-checkout");
+    let worktree = add_worktree(&main, "feature-worktree");
+    (main, worktree)
+}
+
+fn context_focused_on(pane: &str, cwd: &Path) -> String {
+    serde_json::json!({"focused_pane_id": pane, "focused_pane_cwd": cwd}).to_string()
+}
+
+fn opened_cwd(log: &Path) -> String {
+    let calls = fs::read_to_string(log).unwrap();
+    let open = calls.lines().find(|l| l.starts_with("plugin pane open")).unwrap_or_default();
+    let mut words = open.split(' ');
+    words.by_ref().find(|w| *w == "--cwd");
+    words.next().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn open_follows_a_workspace_pane_into_a_linked_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The agent's own process never leaves the main checkout it was launched from — it
+    // works in the worktree through subshells — so both the launch and the live cwd say
+    // "main". An editor pane in the same workspace sits in a subdirectory of the linked
+    // worktree, and that is where the review belongs (specs/herdr-host.md, Repo discovery).
+    let (main, worktree) = main_and_linked_worktree(dir.path());
+    let inside = worktree.join("src");
+    fs::create_dir(&inside).unwrap();
+    panes_with_cwds(dir.path(), &[("w1:p1", &main), ("w1:p2", &inside)]);
+
+    let output = run_with_context("open", dir.path(), &herdr, &context_focused_on("w1:p1", &main));
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(opened_cwd(&log), worktree.to_str().unwrap());
+    let calls = fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        calls.matches("pane list --workspace").count(),
+        1,
+        "the sweep must reuse the held pane-list snapshot: {calls}"
+    );
+}
+
+#[test]
+fn the_linked_worktree_pick_is_off_when_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    fs::write(dir.path().join("config.toml"), "prefer_linked_worktree = false\n").unwrap();
+    let (main, worktree) = main_and_linked_worktree(dir.path());
+    panes_with_cwds(dir.path(), &[("w1:p1", &main), ("w1:p2", &worktree)]);
+
+    let output = run_with_context("open", dir.path(), &herdr, &context_focused_on("w1:p1", &main));
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(opened_cwd(&log), main.to_str().unwrap());
+}
+
+#[test]
+fn two_linked_worktrees_holding_panes_keep_the_main_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // Panes in two different linked worktrees: picking either would be a guess, so the
+    // open stays on the checkout the focused pane names.
+    let (main, first) = main_and_linked_worktree(dir.path());
+    let second = add_worktree(&main, "second-worktree");
+    panes_with_cwds(dir.path(), &[("w1:p1", &main), ("w1:p2", &first), ("w1:p3", &second)]);
+
+    let output = run_with_context("open", dir.path(), &herdr, &context_focused_on("w1:p1", &main));
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(opened_cwd(&log), main.to_str().unwrap());
+}
+
+#[test]
+fn a_pane_in_an_unrelated_repo_never_redirects_the_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The other pane is in a repo of its own, not a worktree of the focused checkout. Only
+    // the checkout's own worktree listing qualifies a candidate.
+    let (main, _worktree) = main_and_linked_worktree(dir.path());
+    let other = init_repo(dir.path(), "other-repo");
+    panes_with_cwds(dir.path(), &[("w1:p1", &main), ("w1:p2", &other)]);
+
+    let output = run_with_context("open", dir.path(), &herdr, &context_focused_on("w1:p1", &main));
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(opened_cwd(&log), main.to_str().unwrap());
+}
+
+#[test]
+fn an_open_from_inside_a_linked_worktree_stays_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    // The focused pane already resolves to a linked worktree. Another pane in a second
+    // worktree must not pull the open away: only a main checkout defers to its siblings.
+    let (main, first) = main_and_linked_worktree(dir.path());
+    let second = add_worktree(&main, "second-worktree");
+    panes_with_cwds(dir.path(), &[("w1:p1", &first), ("w1:p2", &second)]);
+
+    let output = run_with_context("open", dir.path(), &herdr, &context_focused_on("w1:p1", &first));
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(opened_cwd(&log), first.to_str().unwrap());
 }

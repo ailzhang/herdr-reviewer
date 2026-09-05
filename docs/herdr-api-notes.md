@@ -104,6 +104,13 @@ herdr runs plugin commands with a minimal `PATH`; prepend common bin dirs for `j
   (launch) and `.result.pane.foreground_cwd` (live foreground process). A `pane list` entry carries
   `foreground_cwd` too (see above), so `pane.sh` reads it from the pane-list snapshot it already
   holds and falls back to the context cwd.
+- **An agent that works in a worktree through subshells never reports it** (observed, 0.7.5: a
+  Claude Code pane launched in a Sapling main checkout ran its commands in an `sl worktree`
+  while `cwd`, `foreground_cwd`, and `pane process-info` all kept the launch directory). The
+  only pane that reported the worktree was an editor opened there. `pane.sh` reads every
+  pane's `foreground_cwd` from the held snapshot and matches them against the VCS's own
+  worktree listing (`git worktree list --porcelain`, `sl worktree list -Tjson`); herdr's
+  `worktree` API is git-only and answers `not_git_worktree` for Sapling.
 - **`plugin action invoke` resolves context from the focused workspace**, wherever it is run — the
   calling pane's `HERDR_*` env is ignored, and `invoke <action_id> [--plugin ID]` has no workspace
   selector (verified live, 0.7.1: invoked from pane `w1X:p1`, context arrived for focused `w1B`).

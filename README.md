@@ -291,6 +291,7 @@ navigator_position = "right"     # right | bottom | left | top
 toggle_placement = "split"       # split | overlay | zoomed | tab
 toggle_direction = "right"       # right | down — split only
 auto_open = true                 # false when a layout plugin arranges your worktrees
+prefer_linked_worktree = true    # toggle follows the workspace's panes into a linked worktree
 github_host = "github.example.com"   # also gitlab_host, azure_devops_host
 
 [keybindings]
